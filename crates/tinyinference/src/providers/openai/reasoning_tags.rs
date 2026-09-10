@@ -1,12 +1,20 @@
-//! Streaming-safe extraction of inline `<think>…</think>` reasoning tags.
+//! Streaming-safe extraction of inline `<think>…</think>`-style reasoning tags.
 //!
 //! Reasoning models served through OpenAI-compatible local runtimes (qwen3 and
 //! deepseek-r1 distills via Ollama `/v1`, LM Studio, llama.cpp) frequently emit
 //! their chain-of-thought **inline** in the normal `content` string, wrapped in
-//! `<think>…</think>`, instead of on the `reasoning_content` / `reasoning`
+//! a reasoning tag, instead of on the `reasoning_content` / `reasoning`
 //! side-channel the adapter already normalizes (see
 //! [`reasoning_value_text`](super::reasoning_value_text)). Left untouched, that
 //! chain-of-thought leaks straight into the visible assistant text.
+//!
+//! The tag name is not standardized and the runtime does not report it: qwen3
+//! and deepseek-r1 use `<think>`, EXAONE Deep uses `<thought>`, and others use
+//! `<thinking>` or `<reasoning>`. Since nothing downstream re-inspects the text,
+//! a name this module does not match is unrecoverable — so the default accepts
+//! the common set (see [`ReasoningTagExtraction::default`]) rather than one
+//! name. A section is closed by the closing tag of the name that opened it, so
+//! the wider set cannot make one convention terminate another.
 //!
 //! This module moves the tagged text onto the reasoning channel
 //! ([`ContentBlock::Thinking`](crate::message::ContentBlock::Thinking))
@@ -35,8 +43,14 @@
 /// [`OpenAiModel::with_reasoning_tag_extraction`](super::OpenAiModel::with_reasoning_tag_extraction).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReasoningTagExtraction {
-    /// Tag name without angle brackets, e.g. `think` → `<think>` / `</think>`.
-    tag_name: String,
+    /// Tag names without angle brackets, e.g. `think` → `<think>` / `</think>`.
+    /// Any one of them opens a reasoning section; the section is closed by the
+    /// closing tag of *the name that opened it*, so `<thinking>a</think>b`
+    /// stays open until `</thinking>`. Models inline their chain of thought
+    /// under several conventions (`<think>` for qwen3 / deepseek-r1,
+    /// `<thought>` for EXAONE Deep) and the runtime does not tell us which, so
+    /// the default accepts the common set rather than one name.
+    tag_names: Vec<String>,
     /// Separator inserted between multiple extracted reasoning sections (and
     /// between side-channel and inline reasoning). Defaults to a newline.
     separator: String,
@@ -50,7 +64,10 @@ pub struct ReasoningTagExtraction {
 impl Default for ReasoningTagExtraction {
     fn default() -> Self {
         Self {
-            tag_name: "think".to_string(),
+            tag_names: ["think", "thinking", "thought", "reasoning"]
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
             separator: "\n".to_string(),
             start_with_reasoning: false,
         }
@@ -61,8 +78,18 @@ impl ReasoningTagExtraction {
     /// Extraction for a custom tag name (no angle brackets), newline separator,
     /// opening-tag-gated (not DeepSeek mode).
     pub fn new(tag_name: impl Into<String>) -> Self {
+        Self::for_tags([tag_name])
+    }
+
+    /// Extraction for an explicit set of tag names (no angle brackets). Any of
+    /// them opens a section; each is closed by its own closing tag.
+    pub fn for_tags<I, T>(tag_names: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<String>,
+    {
         Self {
-            tag_name: tag_name.into(),
+            tag_names: tag_names.into_iter().map(Into::into).collect(),
             ..Self::default()
         }
     }
@@ -80,14 +107,22 @@ impl ReasoningTagExtraction {
         self
     }
 
-    /// The literal opening tag, e.g. `<think>`.
-    fn opening_tag(&self) -> String {
-        format!("<{}>", self.tag_name)
+    /// The literal opening tags, e.g. `<think>`, positionally aligned with
+    /// [`Self::closing_tags`].
+    fn opening_tags(&self) -> Vec<String> {
+        self.tag_names
+            .iter()
+            .map(|name| format!("<{name}>"))
+            .collect()
     }
 
-    /// The literal closing tag, e.g. `</think>`.
-    fn closing_tag(&self) -> String {
-        format!("</{}>", self.tag_name)
+    /// The literal closing tags, e.g. `</think>`, positionally aligned with
+    /// [`Self::opening_tags`].
+    fn closing_tags(&self) -> Vec<String> {
+        self.tag_names
+            .iter()
+            .map(|name| format!("</{name}>"))
+            .collect()
     }
 
     /// The separator joining reasoning sections.
@@ -131,6 +166,38 @@ pub(super) fn potential_start_index(text: &str, searched: &str) -> Option<usize>
     None
 }
 
+/// Earliest position in `text` at which any of `tags` could begin.
+///
+/// Returns `(idx, Some((i, len)))` when `tags[i]` occurs in full at `idx`, and
+/// `(idx, None)` when `text` ends in a partial tag that is still undecided and
+/// must be held back for more input. `None` when no suffix of `text` could
+/// begin any tag — the whole `text` is safe to release.
+///
+/// Two distinct tags can never match completely at the same index: every tag is
+/// `<name>` or `</name>`, and the terminating `>` means no tag literal is a
+/// prefix of another (`<think>` does not prefix `<thinking>`). A complete match
+/// therefore wins over an undecided partial at the same index without ambiguity.
+fn first_tag_match(text: &str, tags: &[String]) -> Option<(usize, Option<(usize, usize)>)> {
+    let mut best: Option<(usize, Option<(usize, usize)>)> = None;
+    for (i, tag) in tags.iter().enumerate() {
+        let Some(idx) = potential_start_index(text, tag) else {
+            continue;
+        };
+        let resolved = (idx + tag.len() <= text.len()).then_some((i, tag.len()));
+        let better = match best {
+            None => true,
+            // Earliest candidate wins; on a tie a resolved tag beats a partial.
+            Some((best_idx, best_resolved)) => {
+                idx < best_idx || (idx == best_idx && best_resolved.is_none() && resolved.is_some())
+            }
+        };
+        if better {
+            best = Some((idx, resolved));
+        }
+    }
+    best
+}
+
 /// Incremental extractor for the streamed content path.
 ///
 /// Feed each `content` delta to [`push`](Self::push); it appends any resolved
@@ -139,23 +206,28 @@ pub(super) fn potential_start_index(text: &str, searched: &str) -> Option<usize>
 /// at end of stream) resolves them.
 #[derive(Clone, Debug)]
 pub(super) struct ReasoningTagStream {
-    opening: String,
-    closing: String,
+    openings: Vec<String>,
+    closings: Vec<String>,
     /// Bytes received but not yet released (may end in a partial tag).
     buffer: String,
-    /// Whether the machine is currently inside a reasoning section.
-    in_reasoning: bool,
+    /// The closing tags that can end the current reasoning section — the
+    /// matching opener's own tag, or every tag in `start_with_reasoning` mode
+    /// where no opener introduced the section. `None` while scanning visible
+    /// text, so this doubles as "am I inside reasoning".
+    awaiting_close: Option<Vec<String>>,
 }
 
 impl ReasoningTagStream {
     /// Builds a stream extractor from the configured tags. In DeepSeek mode the
     /// machine starts already inside a reasoning section.
     pub(super) fn new(config: &ReasoningTagExtraction) -> Self {
+        let closings = config.closing_tags();
         Self {
-            opening: config.opening_tag(),
-            closing: config.closing_tag(),
+            openings: config.opening_tags(),
+            // No opener ran, so any closing tag ends the section.
+            awaiting_close: config.start_with_reasoning.then(|| closings.clone()),
+            closings,
             buffer: String::new(),
-            in_reasoning: config.start_with_reasoning,
         }
     }
 
@@ -164,12 +236,16 @@ impl ReasoningTagStream {
     pub(super) fn push(&mut self, delta: &str, visible: &mut String, reasoning: &mut String) {
         self.buffer.push_str(delta);
         loop {
-            let tag = if self.in_reasoning {
-                &self.closing
-            } else {
-                &self.opening
+            // Scoped so the borrow of the tag list ends before `self` is
+            // mutated below; the result is all `Copy`.
+            let found = {
+                let tags: &[String] = match self.awaiting_close.as_ref() {
+                    Some(closings) => closings,
+                    None => &self.openings,
+                };
+                first_tag_match(&self.buffer, tags)
             };
-            match potential_start_index(&self.buffer, tag) {
+            match found {
                 // Neither a complete tag nor a partial-tag suffix: everything
                 // buffered is safe to release.
                 None => {
@@ -177,20 +253,28 @@ impl ReasoningTagStream {
                     self.emit(&released, visible, reasoning);
                     break;
                 }
-                Some(idx) => {
+                Some((idx, resolved)) => {
                     // Text before the (partial or full) tag belongs to the
-                    // current channel.
+                    // current channel. Emitted before the state flips below, so
+                    // it lands on the channel that was open when it arrived.
                     let before = self.buffer[..idx].to_string();
                     self.emit(&before, visible, reasoning);
-                    if idx + tag.len() <= self.buffer.len() {
-                        // Complete tag: drop it, toggle channel, keep scanning
-                        // the remainder for the opposite tag.
-                        self.buffer = self.buffer[idx + tag.len()..].to_string();
-                        self.in_reasoning = !self.in_reasoning;
-                    } else {
+                    match resolved {
+                        // Complete tag: drop it, flip channel, keep scanning the
+                        // remainder. Entering reasoning pins the closer to the
+                        // tag that opened it, so `<thinking>a</think>` stays open.
+                        Some((i, len)) => {
+                            self.buffer = self.buffer[idx + len..].to_string();
+                            self.awaiting_close = match self.awaiting_close {
+                                Some(_) => None,
+                                None => Some(vec![self.closings[i].clone()]),
+                            };
+                        }
                         // Partial tag at the buffer tail: hold it for more input.
-                        self.buffer = self.buffer[idx..].to_string();
-                        break;
+                        None => {
+                            self.buffer = self.buffer[idx..].to_string();
+                            break;
+                        }
                     }
                 }
             }
@@ -215,7 +299,7 @@ impl ReasoningTagStream {
         if text.is_empty() {
             return;
         }
-        if self.in_reasoning {
+        if self.awaiting_close.is_some() {
             reasoning.push_str(text);
         } else {
             visible.push_str(text);
@@ -234,28 +318,44 @@ pub(super) fn extract_reasoning(
     config: &ReasoningTagExtraction,
     content: &str,
 ) -> (String, String) {
-    let opening = config.opening_tag();
-    let closing = config.closing_tag();
-    let mut in_reasoning = config.start_with_reasoning;
+    let openings = config.opening_tags();
+    let closings = config.closing_tags();
+    // Mirrors `ReasoningTagStream::awaiting_close`: `Some` means inside a
+    // reasoning section, holding the closing tags that can end it.
+    let mut awaiting_close: Option<Vec<String>> =
+        config.start_with_reasoning.then(|| closings.clone());
     let mut rest = content;
     let mut visible_parts: Vec<&str> = Vec::new();
     let mut reasoning_parts: Vec<&str> = Vec::new();
 
     loop {
-        let tag = if in_reasoning { &closing } else { &opening };
-        match rest.find(tag.as_str()) {
-            Some(idx) => {
+        let tags: &[String] = match awaiting_close.as_ref() {
+            Some(closing) => closing,
+            None => &openings,
+        };
+        // Earliest full occurrence of any candidate. No partial handling here:
+        // the whole string is already in hand.
+        let hit = tags
+            .iter()
+            .enumerate()
+            .filter_map(|(i, tag)| rest.find(tag.as_str()).map(|idx| (idx, i, tag.len())))
+            .min_by_key(|&(idx, _, _)| idx);
+        match hit {
+            Some((idx, i, len)) => {
                 let (before, after) = rest.split_at(idx);
-                if in_reasoning {
+                if awaiting_close.is_some() {
                     reasoning_parts.push(before);
                 } else {
                     visible_parts.push(before);
                 }
-                rest = &after[tag.len()..];
-                in_reasoning = !in_reasoning;
+                rest = &after[len..];
+                awaiting_close = match awaiting_close {
+                    Some(_) => None,
+                    None => Some(vec![closings[i].clone()]),
+                };
             }
             None => {
-                if in_reasoning {
+                if awaiting_close.is_some() {
                     reasoning_parts.push(rest);
                 } else {
                     visible_parts.push(rest);
@@ -469,6 +569,113 @@ mod tests {
             extract_reasoning(&cfg, "reasoning here</think>\n\nvisible answer");
         assert_eq!(visible, "visible answer");
         assert_eq!(reasoning, "reasoning here");
+    }
+
+    /// Captured live from `exaone-deep:2.4b` through Ollama's OpenAI-compatible
+    /// `/v1/chat/completions` (2026-09-10): the model inlines its entire chain of
+    /// thought in `<thought>…</thought>` and sends **no** `reasoning` /
+    /// `reasoning_content` side channel at all. In the real capture the visible
+    /// answer was 11 bytes (`\boxed{4}`) after 4990 bytes of reasoning.
+    #[test]
+    fn default_extracts_thought_tag_from_live_exaone_capture() {
+        let cfg = ReasoningTagExtraction::default();
+        let content = "<thought>\nOkay, the user is asking me what 2 plus 2 is. Addition combines two\n\
+             quantities, so 2 plus 2 means adding them together. That gives 4.\n\
+             </thought>\n\n\\boxed{4}";
+        let (visible, reasoning) = extract_reasoning(&cfg, content);
+        assert_eq!(visible, "\\boxed{4}");
+        assert!(
+            reasoning.contains("Addition combines two"),
+            "chain of thought must land on the reasoning channel, got {reasoning:?}"
+        );
+        assert!(
+            !visible.contains("Okay, the user is asking"),
+            "chain of thought leaked into the visible answer: {visible:?}"
+        );
+    }
+
+    /// The same capture, streamed. The opening tag really does arrive split as
+    /// three deltas (`<`, `thought`, `>`), so this also pins the partial-tag
+    /// buffering across a multi-candidate tag set.
+    #[test]
+    fn default_extracts_thought_tag_split_across_deltas() {
+        let cfg = ReasoningTagExtraction::default();
+        let (visible, reasoning) = run_stream(
+            &cfg,
+            &[
+                "<",
+                "thought",
+                ">",
+                "\n",
+                "Okay",
+                ", 2 plus 2 is 4.",
+                "</thought>",
+                "\n\n",
+                "4",
+            ],
+        );
+        // Streamed deltas are emitted verbatim; only the terminal response
+        // (recomputed through `extract_reasoning`) trims tag-adjacent space.
+        assert_eq!(visible, "\n\n4");
+        assert_eq!(reasoning, "\nOkay, 2 plus 2 is 4.");
+    }
+
+    /// The conventions the default is meant to cover, each opened and closed by
+    /// its own name.
+    #[test]
+    fn default_covers_common_reasoning_tag_names() {
+        let cfg = ReasoningTagExtraction::default();
+        for tag in ["think", "thinking", "thought", "reasoning"] {
+            let content = format!("<{tag}>hidden</{tag}>answer");
+            let (visible, reasoning) = extract_reasoning(&cfg, &content);
+            assert_eq!(visible, "answer", "tag {tag}");
+            assert_eq!(reasoning, "hidden", "tag {tag}");
+
+            let (visible, reasoning) =
+                run_stream(&cfg, &[&format!("<{tag}>hidden</{tag}>"), "answer"]);
+            assert_eq!(visible, "answer", "streamed tag {tag}");
+            assert_eq!(reasoning, "hidden", "streamed tag {tag}");
+        }
+    }
+
+    /// A tag outside the set is ordinary text — widening must not turn every
+    /// angle-bracketed word into reasoning.
+    #[test]
+    fn tag_names_outside_the_default_set_stay_visible() {
+        let cfg = ReasoningTagExtraction::default();
+        let (visible, reasoning) = extract_reasoning(&cfg, "<answer>42</answer>");
+        assert_eq!(visible, "<answer>42</answer>");
+        assert_eq!(reasoning, "");
+
+        let (visible, reasoning) = run_stream(&cfg, &["<ans", "wer>42</answer>"]);
+        assert_eq!(visible, "<answer>42</answer>");
+        assert_eq!(reasoning, "");
+    }
+
+    /// Near-misses must be released, not swallowed. `<thin ` is a live prefix of
+    /// `<think>` *and* `<thinking>`; once disproven both must let it go, and a
+    /// prefix of the longest candidate must not strand the shorter ones.
+    #[test]
+    fn near_miss_prefixes_are_released_not_swallowed() {
+        let cfg = ReasoningTagExtraction::default();
+        for text in [
+            "<thin ", "<thinke", "<thought", "<reason ", "a < b", "<think",
+        ] {
+            let (visible, reasoning) = run_stream(&cfg, &[text]);
+            assert_eq!(visible, text, "prose {text:?} must survive verbatim");
+            assert_eq!(reasoning, "", "prose {text:?} produced reasoning");
+        }
+
+        // Held at a delta boundary, then disproven by the next delta.
+        let (visible, reasoning) = run_stream(&cfg, &["value <", "think about it"]);
+        assert_eq!(visible, "value <think about it");
+        assert_eq!(reasoning, "");
+
+        // `<thinking>` must not be closed by `</think>`: the opener decides the
+        // closer, so the mismatched close is ordinary reasoning text.
+        let (visible, reasoning) = extract_reasoning(&cfg, "<thinking>a</think>b</thinking>tail");
+        assert_eq!(visible, "tail");
+        assert_eq!(reasoning, "a</think>b");
     }
 
     #[test]
