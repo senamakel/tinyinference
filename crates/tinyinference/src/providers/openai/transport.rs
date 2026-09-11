@@ -1885,7 +1885,11 @@ fn responses_sse_failure(body: &str, model: &OpenAiModel) -> Option<ProviderErro
         }
         let detail = event
             .get("error")
-            .or_else(|| event.get("response").and_then(|response| response.get("error")))
+            .or_else(|| {
+                event
+                    .get("response")
+                    .and_then(|response| response.get("error"))
+            })
             .unwrap_or(&event);
         let message = detail
             .get("message")
