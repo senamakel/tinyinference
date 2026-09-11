@@ -32,7 +32,7 @@ use crate::usage::Usage;
 use crate::{Error, Result};
 
 use super::PROVIDER;
-use super::response::{parse_content_block, parse_usage};
+use super::response::parse_usage;
 
 /// One open content block, keyed by its wire `index`.
 #[derive(Clone, Debug)]
