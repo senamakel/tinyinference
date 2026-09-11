@@ -1876,7 +1876,10 @@ fn responses_sse_failure(body: &str, model: &OpenAiModel) -> Option<ProviderErro
         let Ok(event) = serde_json::from_str::<Value>(payload) else {
             continue;
         };
-        let kind = event.get("type").and_then(Value::as_str).unwrap_or_default();
+        let kind = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if kind != "error" && kind != "response.failed" {
             continue;
         }
