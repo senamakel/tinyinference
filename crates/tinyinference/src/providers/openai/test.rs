@@ -2225,6 +2225,7 @@ fn degrade_for_400_unions_with_existing_baseline_degrade() {
 
 mod explicit_cache_control {
     use super::*;
+    use crate::message::ContentBlock;
     use crate::model::{PromptSegment, SegmentRole};
 
     fn cacheable_request() -> ModelRequest {
@@ -2280,7 +2281,12 @@ mod explicit_cache_control {
         let body = model
             .translate_request_with(&request, Degrade::default())
             .unwrap();
-        assert!(!serde_json::to_value(&body).unwrap().to_string().contains("cache_control"));
+        assert!(
+            !serde_json::to_value(&body)
+                .unwrap()
+                .to_string()
+                .contains("cache_control")
+        );
     }
 
     #[test]
@@ -2311,7 +2317,11 @@ mod explicit_cache_control {
             json["messages"][1]["content"][0]["cache_control"],
             json!({ "type": "ephemeral" })
         );
-        assert!(json["messages"][1]["content"][1].get("cache_control").is_none());
+        assert!(
+            json["messages"][1]["content"][1]
+                .get("cache_control")
+                .is_none()
+        );
     }
 
     #[test]
@@ -2321,7 +2331,8 @@ mod explicit_cache_control {
             provider: "p".into(),
             base_url: "https://example.com/v1".into(),
             model: "m".into(),
-            ..ProviderSpec::default()
+            api_key_env: None,
+            requires_api_key: true,
         };
         assert!(
             OpenAiModel::from_spec(spec(crate::providers::ProviderKind::OpenRouter), "k")
