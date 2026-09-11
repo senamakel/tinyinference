@@ -145,7 +145,8 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
     if !request.stop_sequences.is_empty() {
         body["stop_sequences"] = json!(request.stop_sequences);
     }
-    if let (Some(extra), Some(object)) = (request.provider_options.as_object(), body.as_object_mut())
+    if let (Some(extra), Some(object)) =
+        (request.provider_options.as_object(), body.as_object_mut())
     {
         for (key, value) in extra {
             if !RESERVED_OPTIONS.contains(&key.as_str()) {
@@ -271,4 +272,3 @@ fn image_block(image: &ImageRef) -> Value {
         "source": { "type": "url", "url": image.url },
     })
 }
-

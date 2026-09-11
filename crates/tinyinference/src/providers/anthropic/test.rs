@@ -90,9 +90,11 @@ fn a_request_policy_can_veto_breakpoints() {
             ..CachePolicy::default()
         });
     assert!(!cache_breakpoints_enabled(&request));
-    assert!(request_body(&request, "m")["system"][0]
-        .get("cache_control")
-        .is_none());
+    assert!(
+        request_body(&request, "m")["system"][0]
+            .get("cache_control")
+            .is_none()
+    );
 }
 
 #[test]
@@ -113,12 +115,21 @@ fn breakpoints_land_on_tools_system_and_the_final_message() {
         Message::assistant("reply"),
         Message::user("second"),
     ])
-    .with_tools(vec![echo_tool(), ToolSchema::new("other", "Other", json!({"type":"object"}))])
+    .with_tools(vec![
+        echo_tool(),
+        ToolSchema::new("other", "Other", json!({"type":"object"})),
+    ])
     .with_cache_segments(vec![cacheable_system()]);
     let body = request_body(&request, "m");
     assert!(body["tools"][0].get("cache_control").is_none());
-    assert_eq!(body["tools"][1]["cache_control"], json!({ "type": "ephemeral" }));
-    assert_eq!(body["system"][0]["cache_control"], json!({ "type": "ephemeral" }));
+    assert_eq!(
+        body["tools"][1]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+    assert_eq!(
+        body["system"][0]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
     let messages = body["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 3);
     assert!(messages[0]["content"][0].get("cache_control").is_none());
@@ -140,7 +151,10 @@ fn tools_are_declared_with_input_schema_and_tool_choice() {
     assert_eq!(body["tools"][0]["name"], "echo");
     assert_eq!(body["tools"][0]["description"], "Echoes its input");
     assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
-    assert_eq!(body["tool_choice"], json!({ "type": "tool", "name": "echo" }));
+    assert_eq!(
+        body["tool_choice"],
+        json!({ "type": "tool", "name": "echo" })
+    );
 
     let auto = request_body(
         &ModelRequest::new(vec![Message::user("hi")]).with_tools(vec![echo_tool()]),
@@ -165,7 +179,10 @@ fn assistant_tool_calls_become_tool_use_blocks() {
     if let Message::Assistant(message) = &mut assistant {
         message.tool_calls = vec![ToolCall::new("toolu_1", "echo", json!({"text": "x"}))];
     }
-    let body = request_body(&ModelRequest::new(vec![Message::user("hi"), assistant]), "m");
+    let body = request_body(
+        &ModelRequest::new(vec![Message::user("hi"), assistant]),
+        "m",
+    );
     let content = body["messages"][1]["content"].as_array().unwrap();
     assert_eq!(content[0], json!({ "type": "text", "text": "calling" }));
     assert_eq!(content[1]["type"], "tool_use");
@@ -186,7 +203,10 @@ fn tool_results_use_anthropic_tool_result_blocks() {
     assert_eq!(body["messages"][0]["role"], "user");
     assert_eq!(body["messages"][0]["content"][0]["type"], "tool_result");
     assert_eq!(body["messages"][0]["content"][0]["tool_use_id"], "tool_1");
-    assert_eq!(body["messages"][0]["content"][0]["content"][0]["text"], "42");
+    assert_eq!(
+        body["messages"][0]["content"][0]["content"][0]["text"],
+        "42"
+    );
 }
 
 /// Parallel tool calls answer as consecutive tool messages; the Messages API
@@ -202,7 +222,12 @@ fn consecutive_tool_results_merge_into_one_user_message() {
         })
     };
     let body = request_body(
-        &ModelRequest::new(vec![Message::user("go"), Message::assistant("x"), tool("a"), tool("b")]),
+        &ModelRequest::new(vec![
+            Message::user("go"),
+            Message::assistant("x"),
+            tool("a"),
+            tool("b"),
+        ]),
         "m",
     );
     let messages = body["messages"].as_array().unwrap();
@@ -239,7 +264,9 @@ fn signed_thinking_is_replayed_and_unsigned_thinking_is_dropped() {
                 text: "unsigned".into(),
                 signature: None,
             },
-            ContentBlock::RedactedThinking { data: "blob".into() },
+            ContentBlock::RedactedThinking {
+                data: "blob".into(),
+            },
             ContentBlock::Text("answer".into()),
         ],
         tool_calls: vec![],
@@ -248,8 +275,14 @@ fn signed_thinking_is_replayed_and_unsigned_thinking_is_dropped() {
     let body = request_body(&ModelRequest::new(vec![Message::user("q"), assistant]), "m");
     let content = body["messages"][1]["content"].as_array().unwrap();
     assert_eq!(content.len(), 3);
-    assert_eq!(content[0], json!({"type": "thinking", "thinking": "hmm", "signature": "sig"}));
-    assert_eq!(content[1], json!({"type": "redacted_thinking", "data": "blob"}));
+    assert_eq!(
+        content[0],
+        json!({"type": "thinking", "thinking": "hmm", "signature": "sig"})
+    );
+    assert_eq!(
+        content[1],
+        json!({"type": "redacted_thinking", "data": "blob"})
+    );
     assert_eq!(content[2]["text"], "answer");
     assert!(!body.to_string().contains("unsigned"));
 }
@@ -430,7 +463,10 @@ async fn streaming_reassembles_text_tool_calls_and_cache_usage() {
     assert_eq!(response.message.id.as_deref(), Some("msg_s"));
     assert_eq!(response.finish_reason.as_deref(), Some("tool_use"));
     assert_eq!(response.message.tool_calls.len(), 1);
-    assert_eq!(response.message.tool_calls[0].arguments, json!({"text": "héllo"}));
+    assert_eq!(
+        response.message.tool_calls[0].arguments,
+        json!({"text": "héllo"})
+    );
     let usage = response.usage.unwrap();
     assert_eq!(usage.cache_read_tokens, 900);
     assert_eq!(usage.input_tokens, 903);
@@ -480,7 +516,9 @@ async fn streaming_without_message_stop_is_a_provider_failure() {
     let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
         .collect()
         .await;
-    assert!(matches!(items.last(), Some(ModelStreamItem::ProviderFailed(error)) if error.retryable));
+    assert!(
+        matches!(items.last(), Some(ModelStreamItem::ProviderFailed(error)) if error.retryable)
+    );
 }
 
 #[tokio::test]

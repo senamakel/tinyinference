@@ -241,7 +241,9 @@ impl AnthropicStreamAcc {
                     } else {
                         match serde_json::from_str::<Value>(&partial_json) {
                             Ok(arguments) => ToolCall::new(id, name, arguments),
-                            Err(error) => ToolCall::invalid(id, name, partial_json, error.to_string()),
+                            Err(error) => {
+                                ToolCall::invalid(id, name, partial_json, error.to_string())
+                            }
                         }
                     };
                     tool_calls.push(call);
@@ -291,7 +293,13 @@ struct SseState {
 }
 
 impl SseState {
-    fn provider_failure(&self, message: impl Into<String>) -> ModelStreamItem {
+    /// Builds the terminal failure item and drops anything still queued: a
+    /// failure must be the last item a consumer sees, not followed by deltas
+    /// parsed before the error surfaced.
+    fn provider_failure(&mut self, message: impl Into<String>) -> ModelStreamItem {
+        self.pending.clear();
+        self.finished = true;
+        self.terminal_emitted = true;
         ModelStreamItem::ProviderFailed(ProviderError {
             provider: PROVIDER.to_string(),
             model: Some(self.model.clone()),
@@ -371,28 +379,21 @@ async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, SseState)> {
             Some(Ok(chunk)) => {
                 state.buf.extend_from_slice(&chunk);
                 if let Err(error) = state.drain_lines() {
-                    state.finished = true;
-                    state.terminal_emitted = true;
                     let item = state.provider_failure(error.to_string());
                     return Some((item, state));
                 }
             }
             Some(Err(error)) => {
-                state.finished = true;
-                state.terminal_emitted = true;
                 let item = state.provider_failure(error.to_string());
                 return Some((item, state));
             }
             None => {
                 if let Err(error) = state.drain_remaining() {
-                    state.finished = true;
-                    state.terminal_emitted = true;
                     let item = state.provider_failure(error.to_string());
                     return Some((item, state));
                 }
                 state.finished = true;
                 if !state.completion_seen {
-                    state.terminal_emitted = true;
                     let item =
                         state.provider_failure("provider stream ended before a completion signal");
                     return Some((item, state));
@@ -425,7 +426,11 @@ pub(super) fn into_model_stream(response: reqwest::Response, model: String) -> M
 /// path uses.
 #[cfg(test)]
 pub(super) fn stream_from_bytes(chunks: Vec<Vec<u8>>, model: &str) -> ModelStream {
-    let bytes = futures::stream::iter(chunks.into_iter().map(|chunk| Ok(bytes::Bytes::from(chunk))));
+    let bytes = futures::stream::iter(
+        chunks
+            .into_iter()
+            .map(|chunk| Ok(bytes::Bytes::from(chunk))),
+    );
     let state = SseState {
         bytes: Box::pin(bytes),
         buf: Vec::new(),
