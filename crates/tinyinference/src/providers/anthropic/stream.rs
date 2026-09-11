@@ -34,6 +34,11 @@ use crate::{Error, Result};
 use super::PROVIDER;
 use super::response::parse_usage;
 
+/// Anthropic emits content blocks densely from zero. This generous bound keeps
+/// a malicious or corrupt event from turning one wire index into an unbounded
+/// allocation while remaining far above practical response sizes.
+const MAX_CONTENT_BLOCK_INDEX: usize = 1023;
+
 /// One open content block, keyed by its wire `index`.
 #[derive(Clone, Debug)]
 enum OpenBlock {
@@ -104,7 +109,7 @@ impl AnthropicStreamAcc {
                 }
             }
             Some("content_block_start") => {
-                let index = event["index"].as_u64().unwrap_or(0) as usize;
+                let index = event_index(&event)?;
                 let block = &event["content_block"];
                 let open = match block["type"].as_str() {
                     Some("tool_use") => {
@@ -141,7 +146,7 @@ impl AnthropicStreamAcc {
                 *self.slot(index) = Some(open);
             }
             Some("content_block_delta") => {
-                let index = event["index"].as_u64().unwrap_or(0) as usize;
+                let index = event_index(&event)?;
                 let delta = &event["delta"];
                 let slot = self.slot(index);
                 match (delta["type"].as_str(), slot.as_mut()) {
@@ -203,7 +208,21 @@ impl AnthropicStreamAcc {
                     .as_str()
                     .unwrap_or("anthropic stream reported an error")
                     .to_string();
-                return Err(Error::Model(message));
+                let code = event["error"]["type"].as_str().map(str::to_string);
+                let retryable = crate::failure::classify_provider_failure(
+                    None,
+                    code.as_deref(),
+                    &message,
+                )
+                .is_retryable();
+                return Err(Error::Provider(Box::new(ProviderError {
+                    provider: PROVIDER.to_string(),
+                    code,
+                    message,
+                    retryable,
+                    raw: Some(event),
+                    ..ProviderError::default()
+                })));
             }
             // `ping`, `content_block_stop`, and anything newer than this adapter.
             _ => {}
@@ -280,6 +299,19 @@ impl AnthropicStreamAcc {
     }
 }
 
+fn event_index(event: &Value) -> Result<usize> {
+    let index = event["index"]
+        .as_u64()
+        .and_then(|index| usize::try_from(index).ok())
+        .ok_or_else(|| Error::Model("invalid Anthropic SSE content-block index".to_string()))?;
+    if index > MAX_CONTENT_BLOCK_INDEX {
+        return Err(Error::Model(format!(
+            "Anthropic SSE content-block index {index} exceeds limit {MAX_CONTENT_BLOCK_INDEX}"
+        )));
+    }
+    Ok(index)
+}
+
 struct SseState {
     bytes: Pin<Box<dyn Stream<Item = Result<bytes::Bytes>> + Send>>,
     buf: Vec<u8>,
@@ -296,21 +328,31 @@ impl SseState {
     /// Builds the terminal failure item and drops anything still queued: a
     /// failure must be the last item a consumer sees, not followed by deltas
     /// parsed before the error surfaced.
-    fn provider_failure(&mut self, message: impl Into<String>) -> ModelStreamItem {
+    fn provider_failure(&mut self, error: Error) -> ModelStreamItem {
         self.pending.clear();
         self.finished = true;
         self.terminal_emitted = true;
-        ModelStreamItem::ProviderFailed(ProviderError {
-            provider: PROVIDER.to_string(),
-            model: Some(self.model.clone()),
-            message: message.into(),
-            retryable: true,
-            ..ProviderError::default()
-        })
+        let mut provider_error = match error {
+            Error::Provider(error) => *error,
+            error => {
+                let message = error.to_string();
+                let retryable =
+                    crate::failure::classify_provider_failure(None, None, &message).is_retryable();
+                ProviderError {
+                    provider: PROVIDER.to_string(),
+                    message,
+                    retryable,
+                    ..ProviderError::default()
+                }
+            }
+        };
+        provider_error.provider = PROVIDER.to_string();
+        provider_error.model = Some(self.model.clone());
+        ModelStreamItem::ProviderFailed(provider_error)
     }
 
     /// Folds one SSE line. Returns an error only for a provider-reported
-    /// `error` event; malformed lines are skipped.
+    /// `error` event or a malformed complete `data:` payload.
     fn fold_line(&mut self, line: &[u8]) -> Result<()> {
         let line = String::from_utf8_lossy(line);
         let line = line.trim_end_matches('\r');
@@ -321,9 +363,8 @@ impl SseState {
         if payload.is_empty() {
             return Ok(());
         }
-        let Ok(event) = serde_json::from_str::<Value>(payload) else {
-            return Ok(());
-        };
+        let event = serde_json::from_str::<Value>(payload)
+            .map_err(|error| Error::Model(format!("invalid Anthropic SSE data payload: {error}")))?;
         if self.acc.ingest(event, &mut self.pending)? {
             self.completion_seen = true;
             self.finished = true;
@@ -379,23 +420,24 @@ async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, SseState)> {
             Some(Ok(chunk)) => {
                 state.buf.extend_from_slice(&chunk);
                 if let Err(error) = state.drain_lines() {
-                    let item = state.provider_failure(error.to_string());
+                    let item = state.provider_failure(error);
                     return Some((item, state));
                 }
             }
             Some(Err(error)) => {
-                let item = state.provider_failure(error.to_string());
+                let item = state.provider_failure(error);
                 return Some((item, state));
             }
             None => {
                 if let Err(error) = state.drain_remaining() {
-                    let item = state.provider_failure(error.to_string());
+                    let item = state.provider_failure(error);
                     return Some((item, state));
                 }
                 state.finished = true;
                 if !state.completion_seen {
-                    let item =
-                        state.provider_failure("provider stream ended before a completion signal");
+                    let item = state.provider_failure(Error::Model(
+                        "provider stream ended before a completion signal".to_string(),
+                    ));
                     return Some((item, state));
                 }
             }
