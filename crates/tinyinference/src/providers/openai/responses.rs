@@ -187,12 +187,25 @@ pub(super) struct ResponsesContentPart {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ResponsesResponse {
+    /// Terminal provider status, when reported.
+    #[serde(default)]
+    pub(super) status: Option<String>,
+    /// Details explaining why generation was incomplete.
+    #[serde(default)]
+    pub(super) incomplete_details: Option<ResponsesIncompleteDetails>,
     #[serde(default, deserialize_with = "super::types::deserialize_null_as_empty")]
     pub(super) output: Vec<ResponsesOutput>,
     #[serde(default)]
     pub(super) output_text: Option<String>,
     #[serde(default)]
     pub(super) usage: Option<ResponsesUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ResponsesIncompleteDetails {
+    /// Provider-specific truncation or filtering reason.
+    #[serde(default)]
+    pub(super) reason: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -514,6 +527,8 @@ fn unwrap_completed_response(value: Value) -> Value {
 pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
     let parsed: ResponsesResponse =
         serde_json::from_value(value.clone()).unwrap_or_else(|_| ResponsesResponse {
+            status: None,
+            incomplete_details: None,
             output: Vec::new(),
             output_text: None,
             usage: None,

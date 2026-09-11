@@ -2250,16 +2250,12 @@ fn responses_sse_fold_grafts_streamed_output_items_onto_the_completed_response()
     assert_eq!(response.text(), "hello");
 }
 
-/// A body that never reaches a terminal event still yields the last response it
-/// saw, rather than failing the whole call.
+/// A body that never reaches a terminal event is rejected rather than reported
+/// as a successful completion.
 #[test]
-fn responses_sse_fold_falls_back_to_the_last_seen_response() {
+fn responses_sse_fold_rejects_a_missing_terminal_event() {
     let body = "data: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\",\"output\":[]}}\n";
-    let value = super::transport::responses_sse_final_value(body).expect("a fallback response");
-    assert_eq!(
-        value.get("status").and_then(|status| status.as_str()),
-        Some("in_progress")
-    );
+    assert!(super::transport::responses_sse_final_value(body).is_none());
 }
 
 #[test]
