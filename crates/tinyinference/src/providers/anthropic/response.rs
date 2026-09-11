@@ -28,42 +28,6 @@ pub(super) fn parse_usage(usage: &Value) -> Usage {
     }
 }
 
-/// Converts one response content block into the neutral message vocabulary.
-/// Returns `(content block, tool call)`; exactly one side is populated for
-/// the block kinds this adapter understands, and unknown kinds yield neither.
-pub(super) fn parse_content_block(block: &Value) -> (Option<ContentBlock>, Option<ToolCall>) {
-    match block["type"].as_str() {
-        Some("text") => (
-            block["text"]
-                .as_str()
-                .map(|text| ContentBlock::Text(text.to_string())),
-            None,
-        ),
-        Some("tool_use") => (
-            None,
-            Some(ToolCall::new(
-                block["id"].as_str().unwrap_or_default(),
-                block["name"].as_str().unwrap_or_default(),
-                block.get("input").cloned().unwrap_or(Value::Null),
-            )),
-        ),
-        Some("thinking") => (
-            Some(ContentBlock::Thinking {
-                text: block["thinking"].as_str().unwrap_or_default().to_string(),
-                signature: block["signature"].as_str().map(str::to_string),
-            }),
-            None,
-        ),
-        Some("redacted_thinking") => (
-            Some(ContentBlock::RedactedThinking {
-                data: block["data"].as_str().unwrap_or_default().to_string(),
-            }),
-            None,
-        ),
-        _ => (None, None),
-    }
-}
-
 pub(crate) fn parse_response(body: Value) -> Result<ModelResponse> {
     let object = body
         .as_object()
