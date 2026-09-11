@@ -106,7 +106,6 @@ impl AnthropicModel {
         let model = DEFAULT_MODEL.to_string();
         Self {
             client: reqwest::Client::builder()
-                .timeout(None)
                 .connect_timeout(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
