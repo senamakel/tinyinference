@@ -2259,6 +2259,14 @@ fn responses_sse_fold_rejects_a_missing_terminal_event() {
 }
 
 #[test]
+fn responses_sse_fold_keeps_incomplete_terminal_responses() {
+    let body = "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"content_filter\"},\"output\":[]}}\n";
+    let value = super::transport::responses_sse_final_value(body).expect("a terminal response");
+    let response = super::responses::parse_responses_response(value);
+    assert_eq!(response.finish_reason.as_deref(), Some("content_filter"));
+}
+
+#[test]
 fn a_null_tool_calls_array_is_read_as_no_tool_calls() {
     // Mistral-family endpoints spell "the model did not call a tool" as an
     // explicit `null` rather than by omitting the key. `#[serde(default)]`

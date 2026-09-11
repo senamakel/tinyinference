@@ -660,6 +660,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_preserves_incomplete_reason() {
+        let resp = parse_responses_response(json!({
+            "status": "incomplete",
+            "incomplete_details": { "reason": "max_output_tokens" },
+            "output_text": "partial"
+        }));
+        assert_eq!(resp.text(), "partial");
+        assert_eq!(resp.finish_reason.as_deref(), Some("max_output_tokens"));
+    }
+
+    #[test]
     fn parse_responses_wire_reads_sse_completed_event() {
         let sse = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"hi\"}}\n\n";
         let value = parse_responses_wire(sse).expect("sse");
