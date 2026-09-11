@@ -1256,10 +1256,7 @@ impl OpenAiModel {
             model: model.clone(),
             input,
             instructions,
-            stream: self
-                .responses_requires_stream
-                .load(Ordering::Relaxed)
-                .then_some(true),
+            stream: Some(true),
             store: Some(false),
             max_output_tokens,
             tools,
@@ -1370,7 +1367,7 @@ impl OpenAiModel {
         url: &str,
     ) -> Result<reqwest::Response> {
         let mut builder = self.authorized(self.client.post(url)).json(body);
-        if let Some(timeout) = request_timeout(timeout_ms, false) {
+        if let Some(timeout) = request_timeout(timeout_ms, body.stream == Some(true)) {
             builder = builder.timeout(timeout);
         }
         self.send_checked(builder, "responses request", url).await

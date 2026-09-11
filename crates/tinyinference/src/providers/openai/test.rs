@@ -1952,6 +1952,7 @@ fn responses_request_preserves_continuation_format_and_provider_options() {
     assert_eq!(body["reasoning"]["effort"], "high");
     assert_eq!(body["metadata"]["source"], "test");
     assert!(body.get("store").is_some(), "owned store field is retained");
+    assert_eq!(body["stream"], true);
 }
 
 #[tokio::test]
@@ -2259,4 +2260,53 @@ fn responses_sse_fold_falls_back_to_the_last_seen_response() {
         value.get("status").and_then(|status| status.as_str()),
         Some("in_progress")
     );
+}
+
+#[test]
+fn a_null_tool_calls_array_is_read_as_no_tool_calls() {
+    // Mistral-family endpoints spell "the model did not call a tool" as an
+    // explicit `null` rather than by omitting the key. `#[serde(default)]`
+    // covers only the omission, so this body used to fail the whole decode
+    // with `invalid type: null, expected a sequence` — a plain prose answer
+    // surfacing as a transport fault.
+    let body = json!({
+        "id": "chatcmpl-null",
+        "choices": [
+            {
+                "index": 0,
+                "message": { "role": "assistant", "content": "Hi!", "tool_calls": null },
+                "finish_reason": "stop"
+            }
+        ]
+    });
+
+    let response = parse_response(body).expect("a null tool_calls must not fail the call");
+    assert_eq!(response.text(), "Hi!");
+    assert!(response.tool_calls().is_empty());
+}
+
+#[test]
+fn a_null_choices_array_is_read_as_no_choices() {
+    // The same spelling, one level up. What matters is *which* error comes
+    // back: "no choices" is a provider fact the caller can act on, where a
+    // serde failure would name the transport for a body it read perfectly.
+    let error = parse_response(json!({ "id": "chatcmpl-null", "choices": null }))
+        .expect_err("an empty candidate list is still an error");
+    assert!(
+        matches!(error, crate::Error::Model(ref message) if message.contains("no choices")),
+        "expected a model error naming the empty candidate list, got {error:?}"
+    );
+}
+
+#[test]
+fn a_null_tool_calls_delta_is_read_as_no_fragments() {
+    // And on the streaming path, where the same providers repeat it on every
+    // chunk.
+    let chunk: ChatCompletionChunk = serde_json::from_value(json!({
+        "id": "chatcmpl-null",
+        "choices": [{ "index": 0, "delta": { "content": "Hi", "tool_calls": null } }]
+    }))
+    .expect("a null tool_calls must not fail the chunk");
+    assert!(chunk.choices[0].delta.tool_calls.is_empty());
+    assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hi"));
 }
