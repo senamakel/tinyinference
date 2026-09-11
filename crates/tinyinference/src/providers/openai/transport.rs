@@ -1883,7 +1883,10 @@ fn responses_sse_failure(body: &str, model: &OpenAiModel) -> Option<ProviderErro
         if kind != "error" && kind != "response.failed" {
             continue;
         }
-        let detail = event.get("error").unwrap_or(&event);
+        let detail = event
+            .get("error")
+            .or_else(|| event.get("response").and_then(|response| response.get("error")))
+            .unwrap_or(&event);
         let message = detail
             .get("message")
             .and_then(Value::as_str)
