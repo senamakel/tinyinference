@@ -764,6 +764,13 @@ impl OpenAiModel {
 
     /// Anthropic's OpenAI-compatible endpoint (`https://api.anthropic.com/v1`),
     /// default model `claude-3-5-sonnet-latest`.
+    ///
+    /// **Prompt caching does not work on this path.** Anthropic documents the
+    /// compatibility layer as not supporting prompt caching, and it reports
+    /// `prompt_tokens_details` as always empty, so every call re-bills the
+    /// whole prefix. A host that wants cache hits on Claude must use the native
+    /// [`AnthropicModel`](crate::providers::anthropic::AnthropicModel), which
+    /// speaks the Messages API and places `cache_control` breakpoints.
     pub fn anthropic(api_key: impl Into<String>) -> Self {
         Self::compatible_provider(
             "anthropic",
