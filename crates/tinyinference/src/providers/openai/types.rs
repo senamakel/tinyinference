@@ -381,7 +381,7 @@ pub struct UsageWire {
     /// `usage` (`prompt_cache_hit_tokens`) by its own API and by resellers that
     /// relay its usage object verbatim. Newer DeepSeek responses also fill
     /// `prompt_tokens_details.cached_tokens`; older ones and some relays only
-    /// send this field, so it is folded into the same [`Usage`] counter.
+    /// send this field, so it is folded into the same [`Usage`](crate::usage::Usage) counter.
     #[serde(default)]
     pub prompt_cache_hit_tokens: u64,
     /// Optional completion-token breakdown (carries reasoning tokens).

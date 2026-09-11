@@ -3,7 +3,7 @@
 //! Unlike OpenAI-compatible APIs, Anthropic enables prompt caching by attaching
 //! `{"type":"ephemeral"}` as `cache_control` to a tool, system, or content
 //! block. This adapter turns TinyInference's cacheable prompt segments into that
-//! wire shape and maps the provider's cache usage counters back into [`Usage`].
+//! wire shape and maps the provider's cache usage counters back into [`Usage`](crate::usage::Usage).
 //!
 //! # Why the native adapter matters for caching
 //!
