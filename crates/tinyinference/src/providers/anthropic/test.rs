@@ -4,7 +4,9 @@ use serde_json::json;
 use super::*;
 use crate::cache::CachePolicy;
 use crate::message::{ContentBlock, ImageRef, Message, ToolMessage};
-use crate::model::{ModelStreamItem, PromptSegment, SegmentRole, ToolChoice};
+use crate::model::{
+    ModelStreamItem, PromptSegment, ReasoningConfig, ReasoningEffort, SegmentRole, ToolChoice,
+};
 use crate::tool::{ToolCall, ToolSchema};
 
 fn cacheable_system() -> PromptSegment {
@@ -329,6 +331,25 @@ fn provider_options_flatten_except_reserved_and_the_routing_hint() {
 }
 
 #[test]
+fn normalized_reasoning_is_lowered_to_anthropic_thinking() {
+    let budgeted = ModelRequest::new(vec![Message::user("hi")]).with_reasoning(ReasoningConfig {
+        budget_tokens: Some(2048),
+        ..ReasoningConfig::default()
+    });
+    let body = request_body(&budgeted, "m");
+    assert_eq!(
+        body["thinking"],
+        json!({ "type": "enabled", "budget_tokens": 2048 })
+    );
+
+    let adaptive = ModelRequest::new(vec![Message::user("hi")])
+        .with_reasoning_effort(ReasoningEffort::High);
+    let body = request_body(&adaptive, "m");
+    assert_eq!(body["thinking"], json!({ "type": "adaptive" }));
+    assert_eq!(body["output_config"]["effort"], "high");
+}
+
+#[test]
 fn default_model_is_current() {
     assert_eq!(AnthropicModel::new("key").model, "claude-sonnet-4-6");
 }
@@ -366,7 +387,8 @@ fn tool_use_blocks_parse_into_tool_calls() {
             { "type": "text", "text": "Let me check." },
             { "type": "tool_use", "id": "toolu_1", "name": "echo", "input": { "text": "x" } }
         ],
-        "stop_reason": "tool_use"
+        "stop_reason": "tool_use",
+        "usage": { "input_tokens": 2, "output_tokens": 3 }
     }))
     .unwrap();
     assert_eq!(response.text(), "Let me check.");
@@ -380,6 +402,45 @@ fn tool_use_blocks_parse_into_tool_calls() {
         &response.message.content[0],
         ContentBlock::Thinking { signature: Some(s), .. } if s == "s"
     ));
+}
+
+#[test]
+fn malformed_successful_responses_are_rejected() {
+    let valid = json!({
+        "id": "msg_1",
+        "content": [{ "type": "text", "text": "hello" }],
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    let mut cases = Vec::new();
+    let mut missing_id = valid.clone();
+    missing_id.as_object_mut().unwrap().remove("id");
+    cases.push(missing_id);
+    let mut bad_content = valid.clone();
+    bad_content["content"] = json!({});
+    cases.push(bad_content);
+    let mut bad_usage = valid.clone();
+    bad_usage["usage"]["output_tokens"] = json!("one");
+    cases.push(bad_usage);
+    let mut bad_tool = valid;
+    bad_tool["content"] = json!([{
+        "type": "tool_use", "id": "toolu_1", "name": "echo"
+    }]);
+    cases.push(bad_tool);
+
+    for body in cases {
+        assert!(parse_response(body).is_err());
+    }
+}
+
+#[tokio::test]
+async fn cleartext_anthropic_endpoint_requires_explicit_opt_in() {
+    let model = AnthropicModel::with_base_url("secret", "http://example.com/v1");
+    let error = model
+        .post(&ModelRequest::new(vec![Message::user("hi")]), false)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("HTTPS endpoint"));
 }
 
 #[test]
@@ -550,7 +611,56 @@ async fn streaming_error_event_is_a_provider_failure() {
     let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
         .collect()
         .await;
-    assert!(
-        matches!(items.last(), Some(ModelStreamItem::ProviderFailed(error)) if error.message.contains("Overloaded"))
-    );
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::ProviderFailed(error))
+            if error.message.contains("Overloaded")
+                && error.code.as_deref() == Some("overloaded_error")
+                && error.retryable
+                && error.raw.is_some()
+    ));
+}
+
+#[tokio::test]
+async fn permanent_stream_error_is_not_retryable() {
+    let events = [json!({
+        "type":"error",
+        "error":{"type":"authentication_error","message":"invalid api key"}
+    })];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
+        .collect()
+        .await;
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::ProviderFailed(error))
+            if error.code.as_deref() == Some("authentication_error") && !error.retryable
+    ));
+}
+
+#[tokio::test]
+async fn malformed_sse_payload_terminates_with_provider_failure() {
+    let bytes = b"data: {not-json}\n\ndata: {\"type\":\"message_stop\"}\n\n".to_vec();
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![bytes], "m").collect().await;
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::ProviderFailed(error))
+            if error.message.contains("invalid Anthropic SSE data payload")
+    ));
+    assert!(!items.iter().any(|item| matches!(item, ModelStreamItem::Completed(_))));
+}
+
+#[tokio::test]
+async fn oversized_sse_content_block_index_is_rejected() {
+    let events = [json!({
+        "type":"content_block_start",
+        "index": 1_000_000,
+        "content_block":{"type":"text","text":""}
+    })];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
+        .collect()
+        .await;
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::ProviderFailed(error)) if error.message.contains("exceeds limit")
+    ));
 }
