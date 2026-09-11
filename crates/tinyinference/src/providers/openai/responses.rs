@@ -599,6 +599,8 @@ mod tests {
     #[test]
     fn extract_text_prefers_output_text_then_scans_content() {
         let with_convenience = ResponsesResponse {
+            status: None,
+            incomplete_details: None,
             output: Vec::new(),
             output_text: Some("  final  ".to_string()),
             usage: None,
@@ -609,6 +611,8 @@ mod tests {
         );
 
         let via_content = ResponsesResponse {
+            status: None,
+            incomplete_details: None,
             output: vec![ResponsesOutput {
                 content: vec![
                     ResponsesContent {
@@ -631,6 +635,8 @@ mod tests {
         );
 
         let empty = ResponsesResponse {
+            status: None,
+            incomplete_details: None,
             output: Vec::new(),
             output_text: None,
             usage: None,
