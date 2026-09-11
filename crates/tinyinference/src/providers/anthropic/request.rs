@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 
 use crate::message::{ContentBlock, ImageRef, Message};
-use crate::model::{ModelRequest, ToolChoice};
+use crate::model::{ModelRequest, ReasoningEffort, ToolChoice};
 
 use super::DEFAULT_MAX_TOKENS;
 
@@ -134,6 +134,27 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
             if !RESERVED_OPTIONS.contains(&key.as_str()) {
                 object.insert(key.clone(), value.clone());
             }
+        }
+    }
+    if let Some(reasoning) = &request.reasoning {
+        if let Some(budget_tokens) = reasoning.budget_tokens {
+            body["thinking"] = json!({
+                "type": "enabled",
+                "budget_tokens": budget_tokens,
+            });
+        } else if let Some(effort) = reasoning.effort
+            && effort != ReasoningEffort::None
+        {
+            body["thinking"] = json!({ "type": "adaptive" });
+            body["output_config"] = json!({
+                "effort": match effort {
+                    ReasoningEffort::Minimal => "low",
+                    ReasoningEffort::Low => "low",
+                    ReasoningEffort::Medium => "medium",
+                    ReasoningEffort::High => "high",
+                    ReasoningEffort::None => unreachable!(),
+                },
+            });
         }
     }
     body

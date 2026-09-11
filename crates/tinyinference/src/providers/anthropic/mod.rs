@@ -60,6 +60,7 @@ pub(crate) use response::parse_response;
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
 const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
 /// Anthropic requires `max_tokens`; this is the ceiling used when the request
 /// does not set one. Sized for an agent turn that has to fit a tool call plus
 /// prose — the previous 1,024 truncated real tool calls mid-argument.
@@ -76,6 +77,7 @@ pub struct AnthropicModel {
     /// Fixed sampling temperature applied to every request, when set. See
     /// [`Self::with_temperature_override`].
     temperature_override: Option<f64>,
+    allow_insecure_http: bool,
 }
 
 impl std::fmt::Debug for AnthropicModel {
@@ -88,6 +90,7 @@ impl std::fmt::Debug for AnthropicModel {
             .field("model", &self.model)
             .field("profile", &self.profile)
             .field("temperature_override", &self.temperature_override)
+            .field("allow_insecure_http", &self.allow_insecure_http)
             .finish()
     }
 }
@@ -102,7 +105,12 @@ impl AnthropicModel {
     pub fn with_base_url(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
         let model = DEFAULT_MODEL.to_string();
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(None)
+                .connect_timeout(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("Anthropic's default HTTP client configuration is valid"),
             api_key: api_key.into(),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             profile: ModelProfile {
@@ -123,6 +131,7 @@ impl AnthropicModel {
             },
             model,
             temperature_override: None,
+            allow_insecure_http: false,
         }
     }
 
@@ -146,6 +155,15 @@ impl AnthropicModel {
     /// (platform TLS, proxies, default headers, timeouts).
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
         self.client = client;
+        self
+    }
+
+    /// Allows credentials to be sent to an `http://` endpoint.
+    ///
+    /// This is intended only for trusted local Anthropic-compatible servers.
+    /// It should not be enabled for endpoints reached over a network.
+    pub fn with_insecure_http(mut self, allowed: bool) -> Self {
+        self.allow_insecure_http = allowed;
         self
     }
 
@@ -177,6 +195,24 @@ impl AnthropicModel {
     }
 
     async fn post(&self, request: &ModelRequest, streaming: bool) -> Result<reqwest::Response> {
+        let endpoint = reqwest::Url::parse(&self.endpoint()).map_err(|error| {
+            Error::Validation(format!("invalid Anthropic base URL: {error}"))
+        })?;
+        match endpoint.scheme() {
+            "https" => {}
+            "http" if self.allow_insecure_http => {}
+            "http" => {
+                return Err(Error::Validation(
+                    "Anthropic credentials require an HTTPS endpoint; call with_insecure_http(true) only for a trusted local server"
+                        .to_string(),
+                ));
+            }
+            scheme => {
+                return Err(Error::Validation(format!(
+                    "unsupported Anthropic endpoint scheme: {scheme}"
+                )));
+            }
+        }
         let mut body = request_body(request, &self.model);
         if let Some(temperature) = self.temperature_override {
             body["temperature"] = Value::from(request::clamp_temperature(temperature));
@@ -186,13 +222,15 @@ impl AnthropicModel {
         }
         let request_builder = self
             .client
-            .post(self.endpoint())
+            .post(endpoint)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .json(&body);
-        let request_builder = match request.timeout_ms {
-            Some(timeout_ms) => request_builder.timeout(Duration::from_millis(timeout_ms)),
-            None => request_builder,
+        let request_builder = match (streaming, request.timeout_ms) {
+            (false, Some(timeout_ms)) => {
+                request_builder.timeout(Duration::from_millis(timeout_ms))
+            }
+            _ => request_builder,
         };
         let response = request_builder.send().await.map_err(|error| {
             Error::Provider(Box::new(self.provider_error(
