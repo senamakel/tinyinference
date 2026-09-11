@@ -119,7 +119,7 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
         };
     }
     if let Some(temperature) = request.temperature {
-        body["temperature"] = json!(temperature);
+        body["temperature"] = json!(clamp_temperature(temperature));
     }
     if let Some(top_p) = request.top_p {
         body["top_p"] = json!(top_p);
@@ -137,6 +137,13 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
         }
     }
     body
+}
+
+/// Anthropic accepts `0.0..=1.0`; OpenAI-style callers routinely pass up to
+/// `2.0`, which the API rejects outright. Clamping keeps a shared temperature
+/// setting usable across providers instead of failing the call.
+pub(super) fn clamp_temperature(temperature: f64) -> f64 {
+    temperature.clamp(0.0, 1.0)
 }
 
 /// Appends `content` as a message with `role`, merging into the previous

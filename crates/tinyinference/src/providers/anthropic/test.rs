@@ -396,6 +396,27 @@ fn request_body_forwards_generation_controls() {
 }
 
 #[test]
+fn temperature_is_clamped_into_anthropics_range() {
+    let body = request_body(
+        &ModelRequest::new(vec![Message::user("hello")]).with_temperature(1.7),
+        "m",
+    );
+    assert_eq!(body["temperature"], 1.0);
+    let below = request_body(
+        &ModelRequest::new(vec![Message::user("hello")]).with_temperature(-0.5),
+        "m",
+    );
+    assert_eq!(below["temperature"], 0.0);
+}
+
+#[test]
+fn temperature_override_is_recorded_on_the_model() {
+    let model = AnthropicModel::new("key").with_temperature_override(Some(0.3));
+    assert_eq!(model.temperature_override, Some(0.3));
+    assert!(format!("{model:?}").contains("temperature_override: Some(0.3)"));
+}
+
+#[test]
 fn debug_redacts_the_api_key() {
     let model = AnthropicModel::new("secret-api-key");
     let debug = format!("{model:?}");

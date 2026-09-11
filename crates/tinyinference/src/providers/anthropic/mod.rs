@@ -73,6 +73,9 @@ pub struct AnthropicModel {
     base_url: String,
     model: String,
     profile: ModelProfile,
+    /// Fixed sampling temperature applied to every request, when set. See
+    /// [`Self::with_temperature_override`].
+    temperature_override: Option<f64>,
 }
 
 impl std::fmt::Debug for AnthropicModel {
@@ -84,6 +87,7 @@ impl std::fmt::Debug for AnthropicModel {
             .field("base_url", &self.base_url)
             .field("model", &self.model)
             .field("profile", &self.profile)
+            .field("temperature_override", &self.temperature_override)
             .finish()
     }
 }
@@ -118,6 +122,7 @@ impl AnthropicModel {
                 ..ModelProfile::default()
             },
             model,
+            temperature_override: None,
         }
     }
 
@@ -125,6 +130,15 @@ impl AnthropicModel {
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self.profile.model = Some(self.model.clone());
+        self
+    }
+
+    /// Pins the sampling temperature for every request, overriding whatever
+    /// the [`ModelRequest`] carries. `None` restores per-request control.
+    /// Anthropic accepts `0.0..=1.0`; the value is clamped into that range at
+    /// request time, as is a per-request temperature.
+    pub fn with_temperature_override(mut self, temperature: Option<f64>) -> Self {
+        self.temperature_override = temperature;
         self
     }
 
@@ -164,6 +178,9 @@ impl AnthropicModel {
 
     async fn post(&self, request: &ModelRequest, streaming: bool) -> Result<reqwest::Response> {
         let mut body = request_body(request, &self.model);
+        if let Some(temperature) = self.temperature_override {
+            body["temperature"] = Value::from(request::clamp_temperature(temperature));
+        }
         if streaming {
             body["stream"] = Value::Bool(true);
         }
