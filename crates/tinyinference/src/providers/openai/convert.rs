@@ -124,9 +124,13 @@ pub(super) fn translate_user_content(blocks: &[ContentBlock]) -> Result<MessageC
     let mut parts = Vec::with_capacity(blocks.len());
     for block in blocks {
         match block {
-            ContentBlock::Text(t) => parts.push(ContentPartWire::Text { text: t.clone() }),
+            ContentBlock::Text(t) => parts.push(ContentPartWire::Text {
+                text: t.clone(),
+                cache_control: None,
+            }),
             ContentBlock::Json(value) => parts.push(ContentPartWire::Text {
                 text: value.to_string(),
+                cache_control: None,
             }),
             ContentBlock::Image(image) => parts.push(ContentPartWire::ImageUrl {
                 image_url: ImageUrlWire {
@@ -509,7 +513,8 @@ pub(super) fn convert_usage(wire: UsageWire) -> Usage {
             .prompt_tokens_details
             .as_ref()
             .map(|d| d.cached_tokens)
-            .unwrap_or(0),
+            .unwrap_or(0)
+            .max(wire.prompt_cache_hit_tokens),
         cache_creation_tokens: wire
             .prompt_tokens_details
             .as_ref()

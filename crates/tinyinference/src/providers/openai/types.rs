@@ -215,6 +215,12 @@ pub enum ContentPartWire {
     Text {
         /// The text content.
         text: String,
+        /// An explicit prompt-cache breakpoint, in the shape OpenRouter forwards
+        /// to Anthropic (`{"type":"ephemeral"}`). Omitted unless the adapter
+        /// was told the endpoint honours explicit breakpoints — hosted OpenAI
+        /// rejects unknown part fields.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<Value>,
     },
     /// An image reference, by URL or data URI.
     ImageUrl {
@@ -371,6 +377,13 @@ pub struct UsageWire {
     /// Optional input-token breakdown (carries cached tokens).
     #[serde(default)]
     pub prompt_tokens_details: Option<PromptTokensDetailsWire>,
+    /// DeepSeek's native cache-hit counter, reported at the top level of
+    /// `usage` (`prompt_cache_hit_tokens`) by its own API and by resellers that
+    /// relay its usage object verbatim. Newer DeepSeek responses also fill
+    /// `prompt_tokens_details.cached_tokens`; older ones and some relays only
+    /// send this field, so it is folded into the same [`Usage`] counter.
+    #[serde(default)]
+    pub prompt_cache_hit_tokens: u64,
     /// Optional completion-token breakdown (carries reasoning tokens).
     #[serde(default)]
     pub completion_tokens_details: Option<CompletionTokensDetailsWire>,
