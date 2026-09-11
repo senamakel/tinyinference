@@ -1351,7 +1351,7 @@ impl OpenAiModel {
         // first branch anyway. So try JSON first and fold SSE whenever that
         // fails (or whenever the header did say SSE).
         let value: Value = match (is_event_stream, serde_json::from_str::<Value>(&text)) {
-            (false, Ok(value)) => value,
+            (false, Ok(_)) => responses::parse_responses_wire(&text)?,
             _ => responses_sse_final_value(&text).ok_or_else(|| {
                 Error::Model(
                     "openai responses stream carried no `response.completed` event".to_string(),
