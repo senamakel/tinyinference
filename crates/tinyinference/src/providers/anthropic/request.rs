@@ -28,27 +28,9 @@ const RESERVED_OPTIONS: &[&str] = &[
     "prompt_cache_key",
 ];
 
-/// Returns `true` when the request asks for provider cache breakpoints.
-///
-/// Declaring a cacheable segment is the opt-in; a request-level policy can
-/// only veto it. The previous rule required *both* a policy and a segment,
-/// which meant a harness that set `protect_prompt_prefix` on its run policy —
-/// rather than stamping every request — never produced a breakpoint.
-pub(crate) fn cache_breakpoints_enabled(request: &ModelRequest) -> bool {
-    let declares_prefix = request
-        .cache_segments
-        .iter()
-        .any(|segment| segment.cacheable);
-    let policy_allows = request
-        .cache_policy
-        .as_ref()
-        .is_none_or(|policy| policy.protect_prompt_prefix);
-    declares_prefix && policy_allows
-}
-
 /// Builds the native Messages API body.
 pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value {
-    let cache_enabled = cache_breakpoints_enabled(request);
+    let cache_enabled = request.wants_prompt_cache_breakpoints();
 
     let mut system = Vec::new();
     let mut messages: Vec<Value> = Vec::new();

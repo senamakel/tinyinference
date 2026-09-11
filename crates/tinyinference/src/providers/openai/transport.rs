@@ -111,6 +111,12 @@ pub struct OpenAiModel {
     keep_alive: Option<String>,
     json_schema_strict: AtomicBool,
     native_tools_on_wire: AtomicBool,
+    /// Whether the endpoint honours explicit `cache_control` breakpoints on
+    /// content parts (OpenRouter forwards them to Anthropic and Gemini, which
+    /// otherwise cache nothing through a Chat Completions relay). Off by
+    /// default: hosted OpenAI rejects unknown part fields, and its own cache is
+    /// automatic. See [`Self::with_explicit_cache_control`].
+    explicit_cache_control: bool,
 }
 
 impl std::fmt::Debug for OpenAiModel {
@@ -349,6 +355,7 @@ impl OpenAiModel {
             base_url: DEFAULT_BASE_URL.to_string(),
             profile: derive_profile("openai", DEFAULT_MODEL),
             default_provider_options: Value::Null,
+            explicit_cache_control: false,
             responses_api_primary: false,
             responses_omit_max_output_tokens: false,
             extra_query_params: Vec::new(),
@@ -537,6 +544,23 @@ impl OpenAiModel {
     /// [`with_model`](Self::with_model) / [`with_provider`](Self::with_provider).
     pub fn with_vision(mut self, enabled: bool) -> Self {
         self.profile.modalities.image_in = enabled;
+        self
+    }
+
+    /// Sets whether requests carry explicit `cache_control` breakpoints on
+    /// their content parts.
+    ///
+    /// Relays such as OpenRouter forward `{"type":"ephemeral"}` markers to
+    /// providers whose prompt cache is opt-in (Anthropic, Gemini); without them
+    /// a Claude model reached through Chat Completions caches nothing at all.
+    /// When enabled and the request
+    /// [declares a cacheable prefix][ModelRequest::wants_prompt_cache_breakpoints],
+    /// the last system message and the last user message are rendered as
+    /// content parts with a breakpoint on their final text part — the two
+    /// placements OpenRouter documents. Hosted OpenAI rejects unknown part
+    /// fields, so this stays off unless a preset or the caller turns it on.
+    pub fn with_explicit_cache_control(mut self, enabled: bool) -> Self {
+        self.explicit_cache_control = enabled;
         self
     }
 
@@ -774,6 +798,7 @@ impl OpenAiModel {
             "https://openrouter.ai/api/v1",
             "openai/gpt-4o-mini",
         )
+        .with_explicit_cache_control(true)
     }
 
     /// Together AI (`https://api.together.xyz/v1`), default model
@@ -1060,10 +1085,13 @@ impl OpenAiModel {
         } else {
             base_messages
         };
-        let messages = source_messages
+        let mut messages = source_messages
             .iter()
             .map(translate_message)
             .collect::<Result<Vec<_>>>()?;
+        if self.explicit_cache_control && request.wants_prompt_cache_breakpoints() {
+            apply_cache_breakpoints(&mut messages);
+        }
 
         let mut tools: Vec<ToolWire> = if prompt_guided_tools {
             Vec::new()

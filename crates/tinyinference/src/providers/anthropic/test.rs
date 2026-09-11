@@ -1,7 +1,6 @@
 use futures::StreamExt;
 use serde_json::json;
 
-use super::request::cache_breakpoints_enabled;
 use super::*;
 use crate::cache::CachePolicy;
 use crate::message::{ContentBlock, ImageRef, Message, ToolMessage};
@@ -73,7 +72,7 @@ fn cacheable_segments_alone_enable_breakpoints() {
     let request = ModelRequest::new(vec![Message::system("stable"), Message::user("hi")])
         .with_cache_segments(vec![cacheable_system()]);
     assert!(request.cache_policy.is_none());
-    assert!(cache_breakpoints_enabled(&request));
+    assert!(request.wants_prompt_cache_breakpoints());
     let body = request_body(&request, "m");
     assert_eq!(
         body["system"][0]["cache_control"],
@@ -89,7 +88,7 @@ fn a_request_policy_can_veto_breakpoints() {
             protect_prompt_prefix: false,
             ..CachePolicy::default()
         });
-    assert!(!cache_breakpoints_enabled(&request));
+    assert!(!request.wants_prompt_cache_breakpoints());
     assert!(
         request_body(&request, "m")["system"][0]
             .get("cache_control")
@@ -101,7 +100,7 @@ fn a_request_policy_can_veto_breakpoints() {
 fn no_cacheable_segment_means_no_breakpoints() {
     let request = ModelRequest::new(vec![Message::system("stable"), Message::user("hi")])
         .with_cache_policy(protecting_policy());
-    assert!(!cache_breakpoints_enabled(&request));
+    assert!(!request.wants_prompt_cache_breakpoints());
 }
 
 /// Tools, system, and the tail of the conversation each carry a marker so a
