@@ -530,6 +530,14 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
     }
     content.push(ContentBlock::Text(text));
 
+    let finish_reason = match parsed.status.as_deref() {
+        Some("incomplete") => parsed
+            .incomplete_details
+            .as_ref()
+            .and_then(|details| details.reason.clone())
+            .or_else(|| Some("incomplete".to_string())),
+        _ => Some("stop".to_string()),
+    };
     ModelResponse {
         message: AssistantMessage {
             id: None,
@@ -538,7 +546,7 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
             usage,
         },
         usage,
-        finish_reason: Some("stop".to_string()),
+        finish_reason,
         raw: Some(value),
         resolved_model: None,
         continue_turn: None,
