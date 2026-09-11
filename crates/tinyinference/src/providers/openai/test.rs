@@ -2264,6 +2264,149 @@ fn responses_sse_fold_keeps_incomplete_terminal_responses() {
     let value = super::transport::responses_sse_final_value(body).expect("a terminal response");
     let response = super::responses::parse_responses_response(value);
     assert_eq!(response.finish_reason.as_deref(), Some("content_filter"));
+mod explicit_cache_control {
+    use super::*;
+    use crate::message::ContentBlock;
+    use crate::model::{PromptSegment, SegmentRole};
+
+    fn cacheable_request() -> ModelRequest {
+        ModelRequest::new(vec![
+            Message::system("stable rules"),
+            Message::user("first"),
+            Message::assistant("reply"),
+            Message::user("second"),
+        ])
+        .with_cache_segments(vec![PromptSegment {
+            id: "system".into(),
+            role: SegmentRole::System,
+            cacheable: true,
+        }])
+    }
+
+    #[test]
+    fn openrouter_marks_the_last_system_and_user_messages() {
+        let model = OpenAiModel::openrouter("key").with_model("anthropic/claude-sonnet-4-6");
+        let body = model
+            .translate_request_with(&cacheable_request(), Degrade::default())
+            .unwrap();
+        let json = serde_json::to_value(&body).unwrap();
+        let messages = json["messages"].as_array().unwrap();
+        assert_eq!(
+            messages[0]["content"],
+            json!([{ "type": "text", "text": "stable rules", "cache_control": { "type": "ephemeral" } }])
+        );
+        // The earlier user turn keeps its plain-string shape.
+        assert_eq!(messages[1]["content"], "first");
+        assert_eq!(
+            messages[3]["content"][0]["cache_control"],
+            json!({ "type": "ephemeral" })
+        );
+        assert_eq!(json.to_string().matches("cache_control").count(), 2);
+    }
+
+    #[test]
+    fn hosted_openai_never_emits_cache_control() {
+        let model = OpenAiModel::new("key");
+        let body = model
+            .translate_request_with(&cacheable_request(), Degrade::default())
+            .unwrap();
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(!json.to_string().contains("cache_control"));
+        assert_eq!(json["messages"][0]["content"], "stable rules");
+    }
+
+    #[test]
+    fn a_request_without_cacheable_segments_is_untouched_even_on_openrouter() {
+        let model = OpenAiModel::openrouter("key");
+        let request = ModelRequest::new(vec![Message::system("s"), Message::user("u")]);
+        let body = model
+            .translate_request_with(&request, Degrade::default())
+            .unwrap();
+        assert!(
+            !serde_json::to_value(&body)
+                .unwrap()
+                .to_string()
+                .contains("cache_control")
+        );
+    }
+
+    #[test]
+    fn multipart_user_content_marks_its_last_text_part() {
+        let model = OpenAiModel::openrouter("key");
+        let request = ModelRequest::new(vec![
+            Message::system("s"),
+            Message::User(crate::message::UserMessage {
+                content: vec![
+                    ContentBlock::Text("look".into()),
+                    ContentBlock::Image(crate::message::ImageRef {
+                        url: "https://example.com/a.png".into(),
+                        mime_type: None,
+                    }),
+                ],
+            }),
+        ])
+        .with_cache_segments(vec![PromptSegment {
+            id: "system".into(),
+            role: SegmentRole::System,
+            cacheable: true,
+        }]);
+        let body = model
+            .translate_request_with(&request, Degrade::default())
+            .unwrap();
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(
+            json["messages"][1]["content"][0]["cache_control"],
+            json!({ "type": "ephemeral" })
+        );
+        assert!(
+            json["messages"][1]["content"][1]
+                .get("cache_control")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn from_spec_enables_explicit_breakpoints_for_openrouter_only() {
+        let spec = |kind| ProviderSpec {
+            kind,
+            provider: "p".into(),
+            base_url: "https://example.com/v1".into(),
+            model: "m".into(),
+            api_key_env: None,
+            requires_api_key: true,
+        };
+        assert!(
+            OpenAiModel::from_spec(spec(crate::providers::ProviderKind::OpenRouter), "k")
+                .unwrap()
+                .explicit_cache_control
+        );
+        assert!(
+            !OpenAiModel::from_spec(spec(crate::providers::ProviderKind::Compatible), "k")
+                .unwrap()
+                .explicit_cache_control
+        );
+    }
+
+    #[test]
+    fn deepseek_native_cache_hit_counter_is_read() {
+        let usage = convert_usage(
+            serde_json::from_value(json!({
+                "prompt_tokens": 1000, "completion_tokens": 10, "total_tokens": 1010,
+                "prompt_cache_hit_tokens": 960, "prompt_cache_miss_tokens": 40
+            }))
+            .unwrap(),
+        );
+        assert_eq!(usage.cache_read_tokens, 960);
+        let both = convert_usage(
+            serde_json::from_value(json!({
+                "prompt_tokens": 1000, "completion_tokens": 10,
+                "prompt_tokens_details": { "cached_tokens": 960 },
+                "prompt_cache_hit_tokens": 960
+            }))
+            .unwrap(),
+        );
+        assert_eq!(both.cache_read_tokens, 960);
+    }
 }
 
 #[test]

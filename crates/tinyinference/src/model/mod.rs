@@ -379,6 +379,24 @@ impl ModelRequest {
             .map(|s| s.id.clone())
             .collect()
     }
+
+    /// Returns `true` when a provider adapter should emit explicit prompt-cache
+    /// breakpoints for this request.
+    ///
+    /// Declaring a cacheable [`PromptSegment`] is the opt-in; a request-level
+    /// [`CachePolicy`](crate::cache::CachePolicy) can only veto it with
+    /// `protect_prompt_prefix = false`. A request that carries no policy
+    /// follows its segments. Adapters used to require *both* a policy and a
+    /// segment, so a harness protecting the prefix on its run-level policy —
+    /// rather than stamping every request — never produced a breakpoint.
+    pub fn wants_prompt_cache_breakpoints(&self) -> bool {
+        let declares_prefix = self.cache_segments.iter().any(|segment| segment.cacheable);
+        let policy_allows = self
+            .cache_policy
+            .as_ref()
+            .is_none_or(|policy| policy.protect_prompt_prefix);
+        declares_prefix && policy_allows
+    }
 }
 
 impl ModelResponse {

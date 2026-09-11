@@ -118,6 +118,12 @@ pub struct OpenAiModel {
     /// later request sends `stream: true` up front and the SSE body is folded
     /// back into one `ModelResponse`.
     responses_requires_stream: AtomicBool,
+    /// Whether the endpoint honours explicit `cache_control` breakpoints on
+    /// content parts (OpenRouter forwards them to Anthropic and Gemini, which
+    /// otherwise cache nothing through a Chat Completions relay). Off by
+    /// default: hosted OpenAI rejects unknown part fields, and its own cache is
+    /// automatic. See [`Self::with_explicit_cache_control`].
+    pub(super) explicit_cache_control: bool,
 }
 
 impl std::fmt::Debug for OpenAiModel {
@@ -356,6 +362,7 @@ impl OpenAiModel {
             base_url: DEFAULT_BASE_URL.to_string(),
             profile: derive_profile("openai", DEFAULT_MODEL),
             default_provider_options: Value::Null,
+            explicit_cache_control: false,
             responses_api_primary: false,
             responses_omit_max_output_tokens: false,
             extra_query_params: Vec::new(),
@@ -548,6 +555,23 @@ impl OpenAiModel {
         self
     }
 
+    /// Sets whether requests carry explicit `cache_control` breakpoints on
+    /// their content parts.
+    ///
+    /// Relays such as OpenRouter forward `{"type":"ephemeral"}` markers to
+    /// providers whose prompt cache is opt-in (Anthropic, Gemini); without them
+    /// a Claude model reached through Chat Completions caches nothing at all.
+    /// When enabled and the request
+    /// [declares a cacheable prefix][ModelRequest::wants_prompt_cache_breakpoints],
+    /// the last system message and the last user message are rendered as
+    /// content parts with a breakpoint on their final text part — the two
+    /// placements OpenRouter documents. Hosted OpenAI rejects unknown part
+    /// fields, so this stays off unless a preset or the caller turns it on.
+    pub fn with_explicit_cache_control(mut self, enabled: bool) -> Self {
+        self.explicit_cache_control = enabled;
+        self
+    }
+
     /// Bakes provider-specific options onto every request (e.g. a local model's
     /// `{"options": {"num_ctx": 8192}}`). These are merged **under** each
     /// request's own [`ModelRequest::provider_options`], so a per-call option of
@@ -636,12 +660,12 @@ impl OpenAiModel {
         if let Some(kind) = kind {
             return Self::local_runtime(kind, &spec.provider, spec.base_url, api_key, spec.model);
         }
-        Ok(Self::compatible_provider(
-            spec.provider,
-            api_key,
-            spec.base_url,
-            spec.model,
-        ))
+        let explicit_cache_control =
+            matches!(spec.kind, crate::providers::ProviderKind::OpenRouter);
+        Ok(
+            Self::compatible_provider(spec.provider, api_key, spec.base_url, spec.model)
+                .with_explicit_cache_control(explicit_cache_control),
+        )
     }
 
     /// Builds an OpenAI-compatible model from a provider spec, reading the API
@@ -748,6 +772,13 @@ impl OpenAiModel {
 
     /// Anthropic's OpenAI-compatible endpoint (`https://api.anthropic.com/v1`),
     /// default model `claude-3-5-sonnet-latest`.
+    ///
+    /// **Prompt caching does not work on this path.** Anthropic documents the
+    /// compatibility layer as not supporting prompt caching, and it reports
+    /// `prompt_tokens_details` as always empty, so every call re-bills the
+    /// whole prefix. A host that wants cache hits on Claude must use the native
+    /// [`AnthropicModel`](crate::providers::anthropic::AnthropicModel), which
+    /// speaks the Messages API and places `cache_control` breakpoints.
     pub fn anthropic(api_key: impl Into<String>) -> Self {
         Self::compatible_provider(
             "anthropic",
@@ -782,6 +813,7 @@ impl OpenAiModel {
             "https://openrouter.ai/api/v1",
             "openai/gpt-4o-mini",
         )
+        .with_explicit_cache_control(true)
     }
 
     /// Together AI (`https://api.together.xyz/v1`), default model
@@ -1068,10 +1100,13 @@ impl OpenAiModel {
         } else {
             base_messages
         };
-        let messages = source_messages
+        let mut messages = source_messages
             .iter()
             .map(translate_message)
             .collect::<Result<Vec<_>>>()?;
+        if self.explicit_cache_control && request.wants_prompt_cache_breakpoints() {
+            apply_cache_breakpoints(&mut messages);
+        }
 
         let mut tools: Vec<ToolWire> = if prompt_guided_tools {
             Vec::new()

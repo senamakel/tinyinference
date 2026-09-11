@@ -124,9 +124,13 @@ pub(super) fn translate_user_content(blocks: &[ContentBlock]) -> Result<MessageC
     let mut parts = Vec::with_capacity(blocks.len());
     for block in blocks {
         match block {
-            ContentBlock::Text(t) => parts.push(ContentPartWire::Text { text: t.clone() }),
+            ContentBlock::Text(t) => parts.push(ContentPartWire::Text {
+                text: t.clone(),
+                cache_control: None,
+            }),
             ContentBlock::Json(value) => parts.push(ContentPartWire::Text {
                 text: value.to_string(),
+                cache_control: None,
             }),
             ContentBlock::Image(image) => parts.push(ContentPartWire::ImageUrl {
                 image_url: ImageUrlWire {
@@ -142,6 +146,43 @@ pub(super) fn translate_user_content(blocks: &[ContentBlock]) -> Result<MessageC
         }
     }
     Ok(MessageContentWire::Parts(parts))
+}
+
+/// Attaches explicit prompt-cache breakpoints to the last system message and
+/// the last user message, the two placements OpenRouter forwards to Anthropic.
+///
+/// Plain-string content is promoted to a single text part so the marker has a
+/// block to sit on; multi-part content gets the marker on its final text part.
+/// Messages without a text part (image-only) are left untouched.
+pub(super) fn apply_cache_breakpoints(messages: &mut [ChatMessageWire]) {
+    for role in ["system", "user"] {
+        if let Some(message) = messages.iter_mut().rev().find(|m| m.role == role) {
+            mark_last_text_part(message);
+        }
+    }
+}
+
+fn mark_last_text_part(message: &mut ChatMessageWire) {
+    let marker = json!({ "type": "ephemeral" });
+    match message.content.take() {
+        Some(MessageContentWire::Text(text)) => {
+            message.content = Some(MessageContentWire::Parts(vec![ContentPartWire::Text {
+                text,
+                cache_control: Some(marker),
+            }]));
+        }
+        Some(MessageContentWire::Parts(mut parts)) => {
+            if let Some(ContentPartWire::Text { cache_control, .. }) = parts
+                .iter_mut()
+                .rev()
+                .find(|part| matches!(part, ContentPartWire::Text { .. }))
+            {
+                *cache_control = Some(marker);
+            }
+            message.content = Some(MessageContentWire::Parts(parts));
+        }
+        None => {}
+    }
 }
 
 /// Error returned when a content block cannot be represented in an OpenAI
@@ -509,7 +550,8 @@ pub(super) fn convert_usage(wire: UsageWire) -> Usage {
             .prompt_tokens_details
             .as_ref()
             .map(|d| d.cached_tokens)
-            .unwrap_or(0),
+            .unwrap_or(0)
+            .max(wire.prompt_cache_hit_tokens),
         cache_creation_tokens: wire
             .prompt_tokens_details
             .as_ref()
