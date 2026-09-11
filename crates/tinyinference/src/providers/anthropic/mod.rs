@@ -195,9 +195,8 @@ impl AnthropicModel {
     }
 
     async fn post(&self, request: &ModelRequest, streaming: bool) -> Result<reqwest::Response> {
-        let endpoint = reqwest::Url::parse(&self.endpoint()).map_err(|error| {
-            Error::Validation(format!("invalid Anthropic base URL: {error}"))
-        })?;
+        let endpoint = reqwest::Url::parse(&self.endpoint())
+            .map_err(|error| Error::Validation(format!("invalid Anthropic base URL: {error}")))?;
         match endpoint.scheme() {
             "https" => {}
             "http" if self.allow_insecure_http => {}
@@ -227,9 +226,7 @@ impl AnthropicModel {
             .header("anthropic-version", ANTHROPIC_VERSION)
             .json(&body);
         let request_builder = match (streaming, request.timeout_ms) {
-            (false, Some(timeout_ms)) => {
-                request_builder.timeout(Duration::from_millis(timeout_ms))
-            }
+            (false, Some(timeout_ms)) => request_builder.timeout(Duration::from_millis(timeout_ms)),
             _ => request_builder,
         };
         let response = request_builder.send().await.map_err(|error| {

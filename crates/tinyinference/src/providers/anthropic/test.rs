@@ -342,8 +342,8 @@ fn normalized_reasoning_is_lowered_to_anthropic_thinking() {
         json!({ "type": "enabled", "budget_tokens": 2048 })
     );
 
-    let adaptive = ModelRequest::new(vec![Message::user("hi")])
-        .with_reasoning_effort(ReasoningEffort::High);
+    let adaptive =
+        ModelRequest::new(vec![Message::user("hi")]).with_reasoning_effort(ReasoningEffort::High);
     let body = request_body(&adaptive, "m");
     assert_eq!(body["thinking"], json!({ "type": "adaptive" }));
     assert_eq!(body["output_config"]["effort"], "high");
@@ -646,7 +646,11 @@ async fn malformed_sse_payload_terminates_with_provider_failure() {
         Some(ModelStreamItem::ProviderFailed(error))
             if error.message.contains("invalid Anthropic SSE data payload")
     ));
-    assert!(!items.iter().any(|item| matches!(item, ModelStreamItem::Completed(_))));
+    assert!(
+        !items
+            .iter()
+            .any(|item| matches!(item, ModelStreamItem::Completed(_)))
+    );
 }
 
 #[tokio::test]

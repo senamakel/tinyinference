@@ -2,11 +2,11 @@
 
 use serde_json::Value;
 
-use crate::{Error, Result};
 use crate::message::{AssistantMessage, ContentBlock};
 use crate::model::ModelResponse;
 use crate::tool::ToolCall;
 use crate::usage::Usage;
+use crate::{Error, Result};
 
 /// Maps a `usage` object onto [`Usage`]. Anthropic reports the three input
 /// classes separately; `input_tokens` here is their sum so it stays the "size
@@ -65,7 +65,9 @@ pub(super) fn parse_content_block(block: &Value) -> (Option<ContentBlock>, Optio
 }
 
 pub(crate) fn parse_response(body: Value) -> Result<ModelResponse> {
-    let object = body.as_object().ok_or_else(|| malformed("response must be an object"))?;
+    let object = body
+        .as_object()
+        .ok_or_else(|| malformed("response must be an object"))?;
     let id = required_string(object.get("id"), "id")?.to_string();
     let stop_reason = required_string(object.get("stop_reason"), "stop_reason")?.to_string();
     let blocks = object
@@ -104,7 +106,11 @@ pub(crate) fn parse_response(body: Value) -> Result<ModelResponse> {
             "redacted_thinking" => content.push(ContentBlock::RedactedThinking {
                 data: required_string(block.get("data"), "content[].data")?.to_string(),
             }),
-            other => return Err(malformed(&format!("unsupported content block type: {other}"))),
+            other => {
+                return Err(malformed(&format!(
+                    "unsupported content block type: {other}"
+                )));
+            }
         }
     }
     Ok(ModelResponse {

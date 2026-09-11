@@ -209,12 +209,9 @@ impl AnthropicStreamAcc {
                     .unwrap_or("anthropic stream reported an error")
                     .to_string();
                 let code = event["error"]["type"].as_str().map(str::to_string);
-                let retryable = crate::failure::classify_provider_failure(
-                    None,
-                    code.as_deref(),
-                    &message,
-                )
-                .is_retryable();
+                let retryable =
+                    crate::failure::classify_provider_failure(None, code.as_deref(), &message)
+                        .is_retryable();
                 return Err(Error::Provider(Box::new(ProviderError {
                     provider: PROVIDER.to_string(),
                     code,
@@ -363,8 +360,9 @@ impl SseState {
         if payload.is_empty() {
             return Ok(());
         }
-        let event = serde_json::from_str::<Value>(payload)
-            .map_err(|error| Error::Model(format!("invalid Anthropic SSE data payload: {error}")))?;
+        let event = serde_json::from_str::<Value>(payload).map_err(|error| {
+            Error::Model(format!("invalid Anthropic SSE data payload: {error}"))
+        })?;
         if self.acc.ingest(event, &mut self.pending)? {
             self.completion_seen = true;
             self.finished = true;
