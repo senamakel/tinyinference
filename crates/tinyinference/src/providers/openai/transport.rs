@@ -652,12 +652,9 @@ impl OpenAiModel {
         if let Some(kind) = kind {
             return Self::local_runtime(kind, &spec.provider, spec.base_url, api_key, spec.model);
         }
-        Ok(Self::compatible_provider(
-            spec.provider,
-            api_key,
-            spec.base_url,
-            spec.model,
-        ))
+        let explicit_cache_control = matches!(spec.kind, crate::providers::ProviderKind::OpenRouter);
+        Ok(Self::compatible_provider(spec.provider, api_key, spec.base_url, spec.model)
+            .with_explicit_cache_control(explicit_cache_control))
     }
 
     /// Builds an OpenAI-compatible model from a provider spec, reading the API
