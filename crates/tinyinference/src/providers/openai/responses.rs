@@ -187,12 +187,25 @@ pub(super) struct ResponsesContentPart {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ResponsesResponse {
+    /// Terminal provider status, when reported.
+    #[serde(default)]
+    pub(super) status: Option<String>,
+    /// Details explaining why generation was incomplete.
+    #[serde(default)]
+    pub(super) incomplete_details: Option<ResponsesIncompleteDetails>,
     #[serde(default, deserialize_with = "super::types::deserialize_null_as_empty")]
     pub(super) output: Vec<ResponsesOutput>,
     #[serde(default)]
     pub(super) output_text: Option<String>,
     #[serde(default)]
     pub(super) usage: Option<ResponsesUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ResponsesIncompleteDetails {
+    /// Provider-specific truncation or filtering reason.
+    #[serde(default)]
+    pub(super) reason: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -514,6 +527,8 @@ fn unwrap_completed_response(value: Value) -> Value {
 pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
     let parsed: ResponsesResponse =
         serde_json::from_value(value.clone()).unwrap_or_else(|_| ResponsesResponse {
+            status: None,
+            incomplete_details: None,
             output: Vec::new(),
             output_text: None,
             usage: None,
@@ -530,6 +545,14 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
     }
     content.push(ContentBlock::Text(text));
 
+    let finish_reason = match parsed.status.as_deref() {
+        Some("incomplete") => parsed
+            .incomplete_details
+            .as_ref()
+            .and_then(|details| details.reason.clone())
+            .or_else(|| Some("incomplete".to_string())),
+        _ => Some("stop".to_string()),
+    };
     ModelResponse {
         message: AssistantMessage {
             id: None,
@@ -538,7 +561,7 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
             usage,
         },
         usage,
-        finish_reason: Some("stop".to_string()),
+        finish_reason,
         raw: Some(value),
         resolved_model: None,
         continue_turn: None,
@@ -576,6 +599,8 @@ mod tests {
     #[test]
     fn extract_text_prefers_output_text_then_scans_content() {
         let with_convenience = ResponsesResponse {
+            status: None,
+            incomplete_details: None,
             output: Vec::new(),
             output_text: Some("  final  ".to_string()),
             usage: None,
@@ -586,6 +611,8 @@ mod tests {
         );
 
         let via_content = ResponsesResponse {
+            status: None,
+            incomplete_details: None,
             output: vec![ResponsesOutput {
                 content: vec![
                     ResponsesContent {
@@ -608,6 +635,8 @@ mod tests {
         );
 
         let empty = ResponsesResponse {
+            status: None,
+            incomplete_details: None,
             output: Vec::new(),
             output_text: None,
             usage: None,
@@ -634,6 +663,17 @@ mod tests {
     fn parse_tolerates_a_body_without_output() {
         let resp = parse_responses_response(json!({ "id": "resp_1" }));
         assert_eq!(resp.text(), "");
+    }
+
+    #[test]
+    fn parse_preserves_incomplete_reason() {
+        let resp = parse_responses_response(json!({
+            "status": "incomplete",
+            "incomplete_details": { "reason": "max_output_tokens" },
+            "output_text": "partial"
+        }));
+        assert_eq!(resp.text(), "partial");
+        assert_eq!(resp.finish_reason.as_deref(), Some("max_output_tokens"));
     }
 
     #[test]
