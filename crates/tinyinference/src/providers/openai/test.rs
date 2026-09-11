@@ -2264,6 +2264,8 @@ fn responses_sse_fold_keeps_incomplete_terminal_responses() {
     let value = super::transport::responses_sse_final_value(body).expect("a terminal response");
     let response = super::responses::parse_responses_response(value);
     assert_eq!(response.finish_reason.as_deref(), Some("content_filter"));
+}
+
 mod explicit_cache_control {
     use super::*;
     use crate::message::ContentBlock;
