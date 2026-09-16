@@ -50,6 +50,34 @@ pub trait EmbeddingModel: Send + Sync {
     /// Returning an empty `Vec` for empty input is valid.
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
 
+    /// Embeds a batch and also reports what the provider said the batch cost.
+    ///
+    /// Same vectors, same contract, same single request as [`Self::embed`] —
+    /// the only difference is that the provider's own token accounting
+    /// survives the call instead of being dropped with the rest of the
+    /// response. A caller metering embedding spend needs the provider's number
+    /// rather than a local estimate, and this is the only place it exists.
+    ///
+    /// `None` means the provider reported nothing, which is not the same as
+    /// zero: it is the honest answer for a local model, and for any endpoint
+    /// that omits the field. A caller must not substitute an estimate for it.
+    ///
+    /// The default implementation delegates to [`Self::embed`] and reports
+    /// `None`, so an implementation that cannot report usage needs no change.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::embed`] would return for the same batch. Usage is
+    /// reported alongside a success and never turns one into a failure: a
+    /// response whose vectors parsed but whose usage did not is a successful
+    /// embed with no usage.
+    async fn embed_with_usage(
+        &self,
+        texts: &[String],
+    ) -> Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
+        Ok((self.embed(texts).await?, None))
+    }
+
     /// Embeds a retrieval query. Asymmetric providers can override this;
     /// symmetric models reuse [`Self::embed`].
     async fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
@@ -71,6 +99,35 @@ pub trait EmbeddingModel: Send + Sync {
 /// This must remain byte-identical to OpenHuman's persisted signature contract.
 pub fn format_embedding_signature(name: &str, model_id: &str, dimensions: usize) -> String {
     format!("provider={name};model={model_id};dims={dimensions}")
+}
+
+// ── EmbeddingUsage ────────────────────────────────────────────────────────────
+
+/// What a provider reported an embedding request cost, in tokens.
+///
+/// Normalized across providers that each name it differently — OpenAI's
+/// `usage.prompt_tokens`, Voyage's `usage.total_tokens`, Cohere's
+/// `meta.billed_units.input_tokens` — so a caller meters spend without
+/// matching on a provider.
+///
+/// Only ever constructed from a provider's own numbers. There is no estimating
+/// constructor on purpose: a value of this type is a measurement, and a caller
+/// that receives one can price it without qualifying the figure.
+///
+/// Embeddings generate no completion, so there is no output-token counterpart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct EmbeddingUsage {
+    /// Input tokens the provider billed for the batch.
+    pub input_tokens: u64,
+}
+
+impl EmbeddingUsage {
+    /// A usage report of `input_tokens`.
+    #[must_use]
+    pub fn new(input_tokens: u64) -> Self {
+        Self { input_tokens }
+    }
 }
 
 // ── MockEmbeddingModel ────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use super::{EmbeddingModel, OpenAiEmbeddingModel};
+use super::{EmbeddingModel, EmbeddingUsage, OpenAiEmbeddingModel};
 use crate::Result;
 
 /// Voyage AI's OpenAI-compatible API base URL.
@@ -72,5 +72,14 @@ impl EmbeddingModel for VoyageEmbeddingModel {
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         self.inner.embed(texts).await
+    }
+
+    /// Forwarded, not defaulted: Voyage answers on the OpenAI response shape
+    /// and reports `usage.total_tokens`, which the inner model already reads.
+    async fn embed_with_usage(
+        &self,
+        texts: &[String],
+    ) -> Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
+        self.inner.embed_with_usage(texts).await
     }
 }
