@@ -10,11 +10,9 @@ pub mod cache;
 pub mod catalog;
 pub mod classification;
 pub mod completion;
-pub mod device;
 pub mod embeddings;
 pub mod error;
 pub mod failure;
-pub mod local;
 pub mod message;
 pub mod model;
 pub mod providers;
@@ -33,7 +31,6 @@ pub use embeddings::{
     EmbeddingModel, InMemoryVectorStore, MockEmbeddingModel, Retriever, ScoredDoc, VectorStore,
     cosine_similarity,
 };
-pub use local::models::LocalModelConfig;
 pub use message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 pub use model::{
     ChatModel, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,

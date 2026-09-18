@@ -1,4 +1,4 @@
-# tinyinference::providers::openai
+# tinyinference_core::providers::openai
 
 Real OpenAI Chat Completions provider (feature `openai`). This is one of the
 concrete leaves the recursive runtime bottoms out in: a single `OpenAiModel`
@@ -183,13 +183,13 @@ Non-2xx responses are normalized through `parse_error_body` / `provider_error`
 into a structured `ProviderError` (HTTP status, provider error code, and a
 `retryable` flag derived from the status: 408/409/429/5xx are retryable,
 everything else — including 401/400 — is not) and surfaced as
-`tinyinference::Error::Provider`, so
-`tinyinference::failure::classify_provider_error` can classify
+`tinyinference_core::Error::Provider`, so
+`tinyinference_core::failure::classify_provider_error` can classify
 retryability instead of retrying every provider failure indiscriminately.
 Transport-level failures (connection errors, body-read failures) have no such
-structure to preserve and surface as a plain `tinyinference::Error::Model` string
+structure to preserve and surface as a plain `tinyinference_core::Error::Model` string
 via `provider_failure_message`. Malformed JSON bodies surface as
-`tinyinference::Error::Serialization`.
+`tinyinference_core::Error::Serialization`.
 
 ## Operational constraints
 

@@ -1,7 +1,7 @@
 //! Public tool-schema validation contracts.
 
 use serde_json::json;
-use tinyinference::tool::{ToolCall, ToolSchema};
+use tinyinference_core::tool::{ToolCall, ToolSchema};
 
 #[test]
 fn invalid_provider_arguments_fail_even_with_permissive_schema() {

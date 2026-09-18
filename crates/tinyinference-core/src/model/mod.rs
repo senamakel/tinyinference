@@ -98,42 +98,6 @@ pub fn context_window_for_model_id(model: &str) -> Option<u64> {
         })
 }
 
-/// Resolve a preferred context window with a local runtime profile fallback.
-///
-/// Local runtimes must always receive a pre-dispatch budget, even when neither
-/// model metadata nor the runtime profile declares one. In that final case a
-/// conservative 4,096-token floor avoids sending a prompt that is guaranteed
-/// to overflow an unknown loaded context. Cloud callers (`local_kind = None`)
-/// retain `None` rather than being needlessly truncated.
-pub fn context_window_with_local_fallback(
-    model: &str,
-    preferred_window: Option<u64>,
-    local_kind: Option<crate::local::profile::LocalProviderKind>,
-) -> Option<u64> {
-    if let Some(window) = preferred_window {
-        return Some(window);
-    }
-    let kind = local_kind?;
-    let profile = crate::local::profile::profile_for_kind(kind);
-    if let Some(window) = profile.default_context_window {
-        tracing::debug!(
-            model,
-            provider = kind.as_str(),
-            context_window = window,
-            "using local provider profile context window"
-        );
-        return Some(window);
-    }
-    const CONSERVATIVE_LOCAL_CONTEXT_FLOOR: u64 = 4_096;
-    tracing::debug!(
-        model,
-        provider = kind.as_str(),
-        context_window = CONSERVATIVE_LOCAL_CONTEXT_FLOOR,
-        "local provider has no context default; using conservative floor"
-    );
-    Some(CONSERVATIVE_LOCAL_CONTEXT_FLOOR)
-}
-
 /// Returns whether a raw model id identifies a model family with image input.
 ///
 /// This conservative capability hint is intended for local and

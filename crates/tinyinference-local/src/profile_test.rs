@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn local_context_fallback_uses_profiles_and_conservative_floor() {
+    assert_eq!(
+        context_window_with_local_fallback("unknown", None, Some(LocalProviderKind::Ollama)),
+        Some(8_192)
+    );
+    assert_eq!(
+        context_window_with_local_fallback("unknown", None, Some(LocalProviderKind::Mlx)),
+        Some(4_096)
+    );
+    assert_eq!(
+        context_window_with_local_fallback("unknown", None, None),
+        None
+    );
+    assert_eq!(
+        context_window_with_local_fallback("unknown", None, Some(LocalProviderKind::LocalOpenai)),
+        Some(4_096)
+    );
+    assert_eq!(
+        context_window_with_local_fallback("known", Some(128_000), Some(LocalProviderKind::Ollama)),
+        Some(128_000)
+    );
+}
+
+#[test]
 fn kind_from_str_loose_accepts_aliases() {
     assert_eq!(
         LocalProviderKind::from_str_loose("ollama"),

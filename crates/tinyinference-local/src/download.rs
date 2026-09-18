@@ -282,7 +282,7 @@ pub async fn download_to_file(
         let _ = tokio::fs::remove_file(&part_path).await;
     }
 
-    let safe_url = crate::sanitize::redact_url(url);
+    let safe_url = tinyinference_core::sanitize::redact_url(url);
     tracing::debug!("{log_prefix} GET {safe_url} -> {}", part_path.display());
     let client = reqwest::Client::builder()
         // 15s connect handshake; 30min overall request budget (covers 1.6 GB

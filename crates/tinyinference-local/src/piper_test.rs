@@ -1,5 +1,5 @@
 use super::*;
-use crate::local::download::reset_status;
+use crate::download::reset_status;
 
 #[cfg(unix)]
 #[test]

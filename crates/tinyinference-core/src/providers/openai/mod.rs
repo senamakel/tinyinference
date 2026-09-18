@@ -29,9 +29,9 @@
 //! # Example
 //!
 //! ```no_run
-//! use tinyinference::providers::openai::OpenAiModel;
+//! use tinyinference_core::providers::openai::OpenAiModel;
 //!
-//! # fn main() -> tinyinference::Result<()> {
+//! # fn main() -> tinyinference_core::Result<()> {
 //! // Reads OPENAI_API_KEY (and optional OPENAI_MODEL / OPENAI_BASE_URL).
 //! let model = OpenAiModel::from_env()?;
 //! # let _ = model;

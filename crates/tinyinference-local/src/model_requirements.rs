@@ -2,7 +2,7 @@
 //!
 //! The memory tree's embedder (`bge-m3`) is requested with
 //! `num_ctx = 8192` (see
-//! [`crate::embeddings::RECOMMENDED_OLLAMA_CONTEXT_TOKENS`])
+//! [`tinyinference_core::embeddings::RECOMMENDED_OLLAMA_CONTEXT_TOKENS`])
 //! and the summariser hard-caps its output to fit that 8192-token embed
 //! ceiling. A local model whose native context window is below this floor
 //! silently truncates chunks/summaries and corrupts recall, so we refuse
@@ -20,7 +20,8 @@ use serde::Serialize;
 /// never drift from what the memory pipeline actually requests at embed
 /// time. Changing the embedder's context request automatically moves the
 /// acceptance floor with it.
-pub const MIN_CONTEXT_TOKENS: u64 = crate::embeddings::RECOMMENDED_OLLAMA_CONTEXT_TOKENS as u64;
+pub const MIN_CONTEXT_TOKENS: u64 =
+    tinyinference_core::embeddings::RECOMMENDED_OLLAMA_CONTEXT_TOKENS as u64;
 
 /// Verdict for a single model's context window against
 /// [`MIN_CONTEXT_TOKENS`]. Serialized into the diagnostics payload so the

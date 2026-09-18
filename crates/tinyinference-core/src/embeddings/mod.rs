@@ -30,7 +30,7 @@
 //! # Example
 //! ```
 //! use std::sync::Arc;
-//! use tinyinference::embeddings::{InMemoryVectorStore, MockEmbeddingModel, Retriever};
+//! use tinyinference_core::embeddings::{InMemoryVectorStore, MockEmbeddingModel, Retriever};
 //! use serde_json::json;
 //!
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
@@ -75,7 +75,7 @@ use crate::Result;
 ///
 /// # Example
 /// ```
-/// use tinyinference::embeddings::cosine_similarity;
+/// use tinyinference_core::embeddings::cosine_similarity;
 ///
 /// assert_eq!(cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]), 1.0);
 /// assert_eq!(cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]), 0.0);

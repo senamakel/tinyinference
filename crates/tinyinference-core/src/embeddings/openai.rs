@@ -40,9 +40,9 @@ pub fn model_supports_dimensions(model: &str) -> bool {
 ///
 /// # Example
 /// ```no_run
-/// use tinyinference::embeddings::OpenAiEmbeddingModel;
+/// use tinyinference_core::embeddings::OpenAiEmbeddingModel;
 ///
-/// # fn main() -> tinyinference::Result<()> {
+/// # fn main() -> tinyinference_core::Result<()> {
 /// let model = OpenAiEmbeddingModel::from_env()?;
 /// # let _ = model;
 /// # Ok(())

@@ -4,7 +4,7 @@ TinyInference is the provider-facing Rust layer shared by TinyHumans AI agent
 runtimes. It owns model and embedding API concerns without owning an agent loop,
 graph runtime, middleware system, capability registry, or workspace policy.
 
-The crate provides:
+The workspace provides:
 
 - provider-neutral messages, tool-call shapes, requests, responses, usage, and
   capability profiles;
@@ -26,9 +26,9 @@ The crate provides:
 ## Use
 
 ```rust
-use tinyinference::message::Message;
-use tinyinference::model::{ChatModel, ModelRequest};
-use tinyinference::providers::MockModel;
+use tinyinference_core::message::Message;
+use tinyinference_core::model::{ChatModel, ModelRequest};
+use tinyinference_core::providers::MockModel;
 
 tokio::runtime::Runtime::new().unwrap().block_on(async {
 let model = MockModel::echo();
@@ -42,18 +42,18 @@ assert_eq!(response.text(), "hello");
 
 TinyAgents vendors this repository at `vendor/tinyinference` and re-exports the
 public modules through its historical `tinyagents::harness::*` paths. New code
-that only needs inference can depend on TinyInference directly.
+can depend on `tinyinference-core` for provider-neutral inference and
+`tinyinference-local` for local runtimes and installers.
 
 ## Layout
 
 ```text
 Cargo.toml
-crates/tinyinference/
+crates/tinyinference-core/
 └── src/
     ├── cache/       request fingerprints and response-cache contracts
     ├── catalog/     provider model-catalog types and response parsing
     ├── embeddings/ embedding clients, vector store, and retriever
-    ├── local/      local runtime profiles, model selection, and installers
     ├── message/    provider-neutral message and content blocks
     ├── model/      ChatModel, request/response, profiles, and streaming
     ├── providers/  mock and OpenAI-compatible transports
@@ -61,6 +61,8 @@ crates/tinyinference/
     ├── failure.rs  provider-failure classification and retry hints
     ├── tool.rs     model-visible tool schemas and call/delta shapes
     └── usage/      normalized token accounting
+crates/tinyinference-local/
+└── src/            device profiling, local runtimes, model selection, and installers
 ```
 
 ## Development

@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use crate::local::download::{
+use crate::download::{
     ENGINE_PIPER, VoiceInstallState, VoiceInstallStatus, download_to_file, read_status,
     try_acquire_install_slot, write_status,
 };
@@ -396,7 +396,7 @@ async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<(), Str
 
     tracing::debug!(
         "{LOG_PREFIX} downloading voice url={}",
-        crate::sanitize::redact_url(&onnx_url)
+        tinyinference_core::sanitize::redact_url(&onnx_url)
     );
     update_stage(format!("downloading {voice}.onnx"));
     download_to_file(
@@ -426,7 +426,7 @@ async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<(), Str
 
     tracing::debug!(
         "{LOG_PREFIX} downloading voice json url={}",
-        crate::sanitize::redact_url(&json_url)
+        tinyinference_core::sanitize::redact_url(&json_url)
     );
     update_stage(format!("downloading {voice}.onnx.json"));
     download_to_file(
@@ -465,7 +465,7 @@ async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<(), Str
     let archive_path = install.root().join(&archive_name);
     tracing::debug!(
         "{LOG_PREFIX} downloading binary url={}",
-        crate::sanitize::redact_url(&asset.url)
+        tinyinference_core::sanitize::redact_url(&asset.url)
     );
     update_stage("downloading piper binary".to_string());
     download_to_file(

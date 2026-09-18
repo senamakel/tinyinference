@@ -1161,16 +1161,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "tinyinference"
+name = "tinyinference-core"
 version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
- "flate2",
  "futures",
  "hex",
  "httpdate",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "tinyinference-local"
+version = "0.2.1"
+dependencies = [
+ "bytes",
+ "flate2",
+ "futures",
+ "hex",
  "once_cell",
  "reqwest",
  "serde",
@@ -1180,6 +1198,7 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror",
+ "tinyinference-core",
  "tokio",
  "tracing",
  "url",

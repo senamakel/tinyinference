@@ -12,6 +12,41 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Resolve a preferred context window with a local runtime profile fallback.
+///
+/// Local runtimes must always receive a pre-dispatch budget, even when neither
+/// model metadata nor the runtime profile declares one. In that final case a
+/// conservative 4,096-token floor avoids dispatching a prompt that is certain
+/// to overflow an unknown loaded context. Non-local callers retain `None`.
+pub fn context_window_with_local_fallback(
+    model: &str,
+    preferred_window: Option<u64>,
+    local_kind: Option<LocalProviderKind>,
+) -> Option<u64> {
+    if let Some(window) = preferred_window {
+        return Some(window);
+    }
+    let kind = local_kind?;
+    let profile = profile_for_kind(kind);
+    if let Some(window) = profile.default_context_window {
+        tracing::debug!(
+            model,
+            provider = kind.as_str(),
+            context_window = window,
+            "using local provider profile context window"
+        );
+        return Some(window);
+    }
+    const CONSERVATIVE_LOCAL_CONTEXT_FLOOR: u64 = 4_096;
+    tracing::debug!(
+        model,
+        provider = kind.as_str(),
+        context_window = CONSERVATIVE_LOCAL_CONTEXT_FLOOR,
+        "local provider has no context default; using conservative floor"
+    );
+    Some(CONSERVATIVE_LOCAL_CONTEXT_FLOOR)
+}
+
 /// Identifies a local provider type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
