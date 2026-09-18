@@ -726,6 +726,9 @@ impl ModelStream {
     }
 
     /// Replaces metadata shared by all emitted stream items.
+    ///
+    /// A terminal [`ModelStreamItem::Completed`] inherits any absent
+    /// correlation or resolved route from this metadata when it is polled.
     #[must_use]
     pub fn with_metadata(mut self, metadata: ModelStreamMetadata) -> Self {
         self.metadata = metadata;
@@ -733,35 +736,25 @@ impl ModelStream {
     }
 
     /// Sets the stable run/model-call correlation for this stream.
+    ///
+    /// Repeated calls replace the previous value. A terminal
+    /// [`ModelStreamItem::Completed`] inherits the current value only when its
+    /// provider response did not set one.
     #[must_use]
     pub fn with_correlation(mut self, correlation: ModelCallCorrelation) -> Self {
         self.metadata.correlation = Some(correlation);
-        let correlation = self.metadata.correlation.clone();
-        self.map_items(move |item| match item {
-            ModelStreamItem::Completed(mut response) => {
-                if response.correlation.is_none() {
-                    response.correlation.clone_from(&correlation);
-                }
-                ModelStreamItem::Completed(response)
-            }
-            other => other,
-        })
+        self
     }
 
     /// Sets the concrete provider/model/route identity for this stream.
+    ///
+    /// Repeated calls replace the previous value. A terminal
+    /// [`ModelStreamItem::Completed`] inherits the current value only when its
+    /// provider response did not set one.
     #[must_use]
     pub fn with_resolved_route(mut self, route: ResolvedModelRoute) -> Self {
         self.metadata.resolved_route = Some(route);
-        let route = self.metadata.resolved_route.clone();
-        self.map_items(move |item| match item {
-            ModelStreamItem::Completed(mut response) => {
-                if response.resolved_route.is_none() {
-                    response.resolved_route.clone_from(&route);
-                }
-                ModelStreamItem::Completed(response)
-            }
-            other => other,
-        })
+        self
     }
 
     /// Aborts a detached producer if this stream is dropped before completion.
@@ -792,9 +785,19 @@ impl Stream for ModelStream {
         mut self: Pin<&mut Self>,
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        let item = self.inner.as_mut().poll_next(context);
+        let mut item = self.inner.as_mut().poll_next(context);
+        if let std::task::Poll::Ready(Some(ModelStreamItem::Completed(response))) = &mut item {
+            if response.correlation.is_none() {
+                response.correlation.clone_from(&self.metadata.correlation);
+            }
+            if response.resolved_route.is_none() {
+                response
+                    .resolved_route
+                    .clone_from(&self.metadata.resolved_route);
+            }
+        }
         if matches!(
-            item,
+            &item,
             std::task::Poll::Ready(Some(
                 ModelStreamItem::Completed(_)
                     | ModelStreamItem::Failed(_)

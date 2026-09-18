@@ -140,6 +140,19 @@ async fn default_chat_model_stream_propagates_request_correlation_to_terminal_re
         panic!("default stream must complete");
     };
     assert_eq!(response.correlation.as_ref(), Some(&correlation));
+
+    let provider_correlation = ModelCallCorrelation::new("provider-run", "provider-call");
+    let model = RecordingModel::new(
+        ModelResponse::assistant("provider correlation")
+            .with_correlation(provider_correlation.clone()),
+    );
+    let stream = model.stream(&(), ModelRequest::default()).await.unwrap();
+    assert_eq!(stream.metadata(), &ModelStreamMetadata::default());
+    let items = stream.collect::<Vec<_>>().await;
+    let Some(ModelStreamItem::Completed(response)) = items.last() else {
+        panic!("default stream must complete");
+    };
+    assert_eq!(response.correlation.as_ref(), Some(&provider_correlation));
 }
 
 #[tokio::test]
@@ -248,6 +261,53 @@ fn stream_metadata_serializes_with_defaults_and_stamps_terminal_responses() {
     };
     assert_eq!(response.correlation.as_ref(), Some(&correlation));
     assert_eq!(response.resolved_route.as_ref(), Some(&route));
+}
+
+#[test]
+fn repeated_stream_metadata_setters_replace_defaults_without_overwriting_provider_values() {
+    let first_correlation = ModelCallCorrelation::new("first-run", "first-call");
+    let second_correlation = ModelCallCorrelation::new("second-run", "second-call");
+    let first_route = ResolvedModelRoute::new("first", "first-model", "first-route");
+    let second_route = ResolvedModelRoute::new("second", "second-model", "second-route");
+    let stream = ModelStream::new(Box::pin(futures::stream::iter(vec![
+        ModelStreamItem::Completed(ModelResponse::assistant("done")),
+    ])))
+    .with_correlation(first_correlation)
+    .with_resolved_route(first_route)
+    .with_correlation(second_correlation.clone())
+    .with_resolved_route(second_route.clone());
+    assert_eq!(
+        stream.metadata().correlation.as_ref(),
+        Some(&second_correlation)
+    );
+    assert_eq!(
+        stream.metadata().resolved_route.as_ref(),
+        Some(&second_route)
+    );
+    let items = futures::executor::block_on(stream.collect::<Vec<_>>());
+    let Some(ModelStreamItem::Completed(response)) = items.last() else {
+        panic!("stream must complete");
+    };
+    assert_eq!(response.correlation.as_ref(), Some(&second_correlation));
+    assert_eq!(response.resolved_route.as_ref(), Some(&second_route));
+
+    let provider_correlation = ModelCallCorrelation::new("provider-run", "provider-call");
+    let provider_route = ResolvedModelRoute::new("provider", "model", "provider-route");
+    let stream = ModelStream::new(Box::pin(futures::stream::iter(vec![
+        ModelStreamItem::Completed(
+            ModelResponse::assistant("provider values")
+                .with_correlation(provider_correlation.clone())
+                .with_resolved_route(provider_route.clone()),
+        ),
+    ])))
+    .with_correlation(second_correlation)
+    .with_resolved_route(second_route);
+    let items = futures::executor::block_on(stream.collect::<Vec<_>>());
+    let Some(ModelStreamItem::Completed(response)) = items.last() else {
+        panic!("stream must complete");
+    };
+    assert_eq!(response.correlation.as_ref(), Some(&provider_correlation));
+    assert_eq!(response.resolved_route.as_ref(), Some(&provider_route));
 }
 
 #[tokio::test]
@@ -359,9 +419,10 @@ async fn observer_reports_each_terminal_outcome_once() {
 #[tokio::test]
 async fn observer_streams_report_one_terminal_outcome_with_stream_metadata() {
     let correlation = ModelCallCorrelation::new("stream-run", "stream-call");
+    let route = ResolvedModelRoute::new("mock", "model", "route");
     let metadata = ModelStreamMetadata {
         correlation: Some(correlation.clone()),
-        resolved_route: Some(ResolvedModelRoute::new("mock", "model", "route")),
+        resolved_route: Some(route.clone()),
     };
     let observer = Arc::new(RecordingObserver::default());
     let success = ObservingModel::new(
@@ -416,13 +477,13 @@ async fn observer_streams_report_one_terminal_outcome_with_stream_metadata() {
     assert_eq!(observations.len(), 4);
     assert!(matches!(
         &observations[0],
-        ModelCallObservation::Succeeded { correlation: observed, .. }
-            if observed.as_ref() == Some(&correlation)
+        ModelCallObservation::Succeeded { correlation: observed, route: observed_route, .. }
+            if observed.as_ref() == Some(&correlation) && observed_route.as_ref() == Some(&route)
     ));
     assert!(matches!(
         &observations[1],
-        ModelCallObservation::CacheHit { correlation: observed, .. }
-            if observed.as_ref() == Some(&correlation)
+        ModelCallObservation::CacheHit { correlation: observed, route: observed_route, .. }
+            if observed.as_ref() == Some(&correlation) && observed_route.as_ref() == Some(&route)
     ));
     assert!(matches!(
         &observations[2],

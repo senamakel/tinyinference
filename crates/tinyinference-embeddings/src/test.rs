@@ -708,6 +708,17 @@ fn openai_dimension_discovery_updates_the_trait_contract() {
 // ── EmbeddingUsage ────────────────────────────────────────────────────────────
 
 #[test]
+fn embedding_usage_serializes_as_stable_token_metadata() {
+    let usage = EmbeddingUsage::new(128);
+    let encoded = serde_json::to_value(usage).expect("embedding usage serializes");
+    assert_eq!(encoded, json!({ "input_tokens": 128 }));
+    assert_eq!(
+        serde_json::from_value::<EmbeddingUsage>(encoded).unwrap(),
+        usage
+    );
+}
+
+#[test]
 fn openai_usage_reads_prompt_tokens() {
     let value = json!({"data": [], "usage": {"prompt_tokens": 128, "total_tokens": 128}});
     assert_eq!(
