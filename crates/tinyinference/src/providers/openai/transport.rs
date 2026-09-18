@@ -6,6 +6,7 @@
 
 use super::responses;
 use super::*;
+use crate::model::effective_temperature;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// How the provider expects the API credential to be sent on each request.
@@ -161,56 +162,6 @@ pub(super) fn auth_headers(auth: &AuthStyle, api_key: &str) -> Vec<(String, Stri
         ],
         AuthStyle::Custom(name) => vec![(name.clone(), api_key.to_string())],
     }
-}
-
-/// Case-insensitive glob match supporting the `*` wildcard (the only metacharacter
-/// used by model-id patterns). `"o1*"` matches `"o1-mini"`; `"*turbo"` matches
-/// `"gpt-4-turbo"`; a pattern with no `*` matches exactly.
-pub(super) fn glob_match(pattern: &str, value: &str) -> bool {
-    let pattern = pattern.to_ascii_lowercase();
-    let value = value.to_ascii_lowercase();
-    let segments: Vec<&str> = pattern.split('*').collect();
-    if segments.len() == 1 {
-        return pattern == value;
-    }
-    let mut cursor = 0usize;
-    for (idx, segment) in segments.iter().enumerate() {
-        if segment.is_empty() {
-            continue;
-        }
-        if idx == 0 {
-            // A non-empty leading segment must be a prefix.
-            if !value[cursor..].starts_with(segment) {
-                return false;
-            }
-            cursor += segment.len();
-        } else if idx == segments.len() - 1 {
-            // A non-empty trailing segment must be a suffix.
-            return value[cursor..].ends_with(segment);
-        } else {
-            match value[cursor..].find(segment) {
-                Some(offset) => cursor += offset + segment.len(),
-                None => return false,
-            }
-        }
-    }
-    // Trailing `*` (empty last segment) matches the remainder.
-    true
-}
-
-/// The `temperature` to send for `model`: `None` (omitted) when the model matches
-/// a temperature-unsupported pattern, else the override if set, else the request's
-/// temperature. Pure, so the policy is unit-testable without a request.
-pub(super) fn effective_temperature(
-    model: &str,
-    request_temperature: Option<f64>,
-    temperature_override: Option<f64>,
-    temperature_unsupported: &[String],
-) -> Option<f64> {
-    if temperature_unsupported.iter().any(|p| glob_match(p, model)) {
-        return None;
-    }
-    temperature_override.or(request_temperature)
 }
 
 /// Concatenates the text of a message's content blocks (non-text blocks — images,

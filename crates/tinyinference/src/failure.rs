@@ -1,5 +1,7 @@
 //! Provider-neutral failure classification shared by transport adapters.
 
+use std::time::Duration;
+
 /// Provider failure class used for retry and telemetry decisions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderFailureClass {
@@ -72,8 +74,11 @@ fn contains_business_limit(lower: &str) -> bool {
     [
         "plan does not include",
         "doesn't include",
+        "not include",
         "insufficient balance",
+        "insufficient_balance",
         "insufficient quota",
+        "insufficient_quota",
         "quota exhausted",
         "out of credits",
         "no available package",
@@ -88,6 +93,50 @@ fn contains_business_limit(lower: &str) -> bool {
                 .parse::<u16>()
                 .is_ok_and(|code| matches!(code, 1113 | 1311))
         })
+}
+
+fn indicates_upstream_failure(lower: &str) -> bool {
+    [
+        "no healthy upstream",
+        "upstream unavailable",
+        "service unavailable",
+        "408 request timeout",
+        "409 conflict",
+        "500 internal server error",
+        "502 bad gateway",
+        "503 service unavailable",
+        "504 gateway timeout",
+    ]
+    .iter()
+    .any(|hint| lower.contains(hint))
+}
+
+fn indicates_terminal_request(lower: &str) -> bool {
+    [
+        "invalid api key",
+        "incorrect api key",
+        "missing api key",
+        "api key not set",
+        "authentication failed",
+        "auth failed",
+        "unauthorized",
+        "forbidden",
+        "permission denied",
+        "access denied",
+        "invalid token",
+    ]
+    .iter()
+    .any(|hint| lower.contains(hint))
+        || (lower.contains("model")
+            && [
+                "not found",
+                "unknown",
+                "unsupported",
+                "does not exist",
+                "invalid",
+            ]
+            .iter()
+            .any(|hint| lower.contains(hint)))
 }
 
 /// Classifies a provider failure from status, code, and message detail.
@@ -114,41 +163,12 @@ pub fn classify_provider_failure(
     }
 
     if status.is_some_and(|value| matches!(value, 408 | 409) || value >= 500)
-        || [
-            "no healthy upstream",
-            "upstream unavailable",
-            "service unavailable",
-            "bad gateway",
-            "gateway timeout",
-        ]
-        .iter()
-        .any(|hint| lower.contains(hint))
+        || indicates_upstream_failure(&lower)
     {
         return ProviderFailureClass::UpstreamUnhealthy;
     }
 
-    if status.is_some_and(|value| (400..500).contains(&value))
-        || [
-            "invalid api key",
-            "incorrect api key",
-            "missing api key",
-            "authentication failed",
-            "unauthorized",
-            "forbidden",
-            "permission denied",
-        ]
-        .iter()
-        .any(|hint| lower.contains(hint))
-        || (lower.contains("model")
-            && [
-                "not found",
-                "unknown",
-                "unsupported",
-                "does not exist",
-                "invalid",
-            ]
-            .iter()
-            .any(|hint| lower.contains(hint)))
+    if status.is_some_and(|value| (400..500).contains(&value)) || indicates_terminal_request(&lower)
     {
         return ProviderFailureClass::NonRetryable;
     }
@@ -160,3 +180,40 @@ pub fn classify_provider_failure(
 pub fn classify_provider_error(error: &crate::model::ProviderError) -> ProviderFailureClass {
     classify_provider_failure(error.status, error.code.as_deref(), &error.message)
 }
+
+/// Returns whether a normalized provider error is safe to retry.
+pub fn provider_error_is_retryable(error: &crate::model::ProviderError) -> bool {
+    classify_provider_error(error).is_retryable()
+}
+
+/// Parses a `Retry-After` / `retry_after` value from provider error text.
+///
+/// Integer and fractional seconds are accepted and returned as milliseconds.
+pub fn parse_retry_after_ms(message: &str) -> Option<u64> {
+    let lower = message.to_ascii_lowercase();
+    for prefix in &[
+        "retry-after:",
+        "retry_after:",
+        "retry-after ",
+        "retry_after ",
+    ] {
+        if let Some(position) = lower.find(prefix) {
+            let number: String = message[position + prefix.len()..]
+                .trim_start()
+                .chars()
+                .take_while(|character| character.is_ascii_digit() || *character == '.')
+                .collect();
+            if let Ok(seconds) = number.parse::<f64>()
+                && seconds.is_finite()
+                && seconds >= 0.0
+            {
+                return u64::try_from(Duration::from_secs_f64(seconds).as_millis()).ok();
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+#[path = "failure_test.rs"]
+mod tests;

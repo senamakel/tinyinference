@@ -1649,15 +1649,16 @@ fn derive_profile_populates_known_context_windows() {
 
 #[test]
 fn glob_match_handles_prefix_suffix_infix_and_exact() {
-    assert!(glob_match("o1*", "o1-mini"));
-    assert!(glob_match("o3*", "o3"));
-    assert!(glob_match("gpt-5*", "GPT-5-Turbo")); // case-insensitive
-    assert!(glob_match("*turbo", "gpt-4-turbo"));
-    assert!(glob_match("*mid*", "a-middle-b"));
-    assert!(glob_match("gpt-4o", "gpt-4o")); // no wildcard → exact
-    assert!(!glob_match("o1*", "gpt-4o"));
-    assert!(!glob_match("gpt-4o", "gpt-4o-mini")); // exact, not prefix
-    assert!(!glob_match("*turbo", "turbo-x"));
+    use crate::model::model_id_glob_match;
+    assert!(model_id_glob_match("o1*", "o1-mini"));
+    assert!(model_id_glob_match("o3*", "o3"));
+    assert!(model_id_glob_match("gpt-5*", "GPT-5-Turbo")); // case-insensitive
+    assert!(model_id_glob_match("*turbo", "gpt-4-turbo"));
+    assert!(model_id_glob_match("*mid*", "a-middle-b"));
+    assert!(model_id_glob_match("gpt-4o", "gpt-4o")); // no wildcard → exact
+    assert!(!model_id_glob_match("o1*", "gpt-4o"));
+    assert!(!model_id_glob_match("gpt-4o", "gpt-4o-mini")); // exact, not prefix
+    assert!(!model_id_glob_match("*turbo", "turbo-x"));
 }
 
 #[test]

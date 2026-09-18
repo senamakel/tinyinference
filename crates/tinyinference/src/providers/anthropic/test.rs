@@ -478,6 +478,24 @@ fn temperature_override_is_recorded_on_the_model() {
 }
 
 #[test]
+fn temperature_policy_uses_the_effective_request_model() {
+    let model = AnthropicModel::new("key")
+        .with_model("claude-sonnet-4-6")
+        .with_temperature_override(Some(0.3))
+        .with_temperature_unsupported_models(["claude-3-5-*"]);
+    let normal =
+        model.request_body(&ModelRequest::new(vec![Message::user("hello")]).with_temperature(0.7));
+    assert_eq!(normal["temperature"], 0.3);
+
+    let suppressed = model.request_body(
+        &ModelRequest::new(vec![Message::user("hello")])
+            .with_model("claude-3-5-sonnet")
+            .with_temperature(0.7),
+    );
+    assert!(suppressed.get("temperature").is_none());
+}
+
+#[test]
 fn debug_redacts_the_api_key() {
     let model = AnthropicModel::new("secret-api-key");
     let debug = format!("{model:?}");

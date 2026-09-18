@@ -51,6 +51,7 @@ use std::time::Duration;
 
 use crate::model::{
     ChatModel, Modalities, ModelProfile, ModelRequest, ModelResponse, ModelStream, ProviderError,
+    effective_temperature,
 };
 use crate::{Error, Result};
 
@@ -77,6 +78,7 @@ pub struct AnthropicModel {
     /// Fixed sampling temperature applied to every request, when set. See
     /// [`Self::with_temperature_override`].
     temperature_override: Option<f64>,
+    temperature_unsupported: Vec<String>,
     allow_insecure_http: bool,
 }
 
@@ -90,6 +92,7 @@ impl std::fmt::Debug for AnthropicModel {
             .field("model", &self.model)
             .field("profile", &self.profile)
             .field("temperature_override", &self.temperature_override)
+            .field("temperature_unsupported", &self.temperature_unsupported)
             .field("allow_insecure_http", &self.allow_insecure_http)
             .finish()
     }
@@ -130,6 +133,7 @@ impl AnthropicModel {
             },
             model,
             temperature_override: None,
+            temperature_unsupported: Vec::new(),
             allow_insecure_http: false,
         }
     }
@@ -147,6 +151,15 @@ impl AnthropicModel {
     /// request time, as is a per-request temperature.
     pub fn with_temperature_override(mut self, temperature: Option<f64>) -> Self {
         self.temperature_override = temperature;
+        self
+    }
+
+    /// Configures model-id glob patterns whose targets reject temperature.
+    pub fn with_temperature_unsupported_models(
+        mut self,
+        patterns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.temperature_unsupported = patterns.into_iter().map(Into::into).collect();
         self
     }
 
@@ -193,6 +206,26 @@ impl AnthropicModel {
         request.model.as_deref().unwrap_or(&self.model)
     }
 
+    fn request_body(&self, request: &ModelRequest) -> Value {
+        let mut body = request_body(request, &self.model);
+        match effective_temperature(
+            self.request_model(request),
+            request.temperature,
+            self.temperature_override,
+            &self.temperature_unsupported,
+        ) {
+            Some(temperature) => {
+                body["temperature"] = Value::from(request::clamp_temperature(temperature));
+            }
+            None => {
+                if let Some(object) = body.as_object_mut() {
+                    object.remove("temperature");
+                }
+            }
+        }
+        body
+    }
+
     async fn post(&self, request: &ModelRequest, streaming: bool) -> Result<reqwest::Response> {
         let endpoint = reqwest::Url::parse(&self.endpoint())
             .map_err(|error| Error::Validation(format!("invalid Anthropic base URL: {error}")))?;
@@ -211,10 +244,7 @@ impl AnthropicModel {
                 )));
             }
         }
-        let mut body = request_body(request, &self.model);
-        if let Some(temperature) = self.temperature_override {
-            body["temperature"] = Value::from(request::clamp_temperature(temperature));
-        }
+        let mut body = self.request_body(request);
         if streaming {
             body["stream"] = Value::Bool(true);
         }

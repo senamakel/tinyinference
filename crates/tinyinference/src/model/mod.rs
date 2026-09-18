@@ -30,9 +30,9 @@ pub use types::*;
 enum ContextPatternMatch {
     /// Pattern may appear anywhere in the lowercased model id.
     Substring,
-    /// Pattern must be a complete segment delimited by common provider/id
-    /// separators. This avoids false positives for short model ids such as
-    /// `o1` and `o3`.
+    /// Pattern must be a complete alphanumeric-delimited segment. This avoids
+    /// false positives for short model ids such as `o1` and `o3` while still
+    /// recognizing repackaged ids such as `mistral-for-o1-benchmark`.
     Segment,
 }
 
@@ -73,13 +73,9 @@ const MODEL_CONTEXT_PATTERNS: &[(&str, ContextPatternMatch, u64)] = &[
 fn matches_context_pattern(lower: &str, pattern: &str, mode: ContextPatternMatch) -> bool {
     match mode {
         ContextPatternMatch::Substring => lower.contains(pattern),
-        ContextPatternMatch::Segment => {
-            let model_name = lower.rsplit(['/', ':']).next().unwrap_or(lower);
-            model_name
-                .split(['-', '_', '.'])
-                .next()
-                .is_some_and(|segment| segment == pattern)
-        }
+        ContextPatternMatch::Segment => lower
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .any(|segment| segment == pattern),
     }
 }
 
@@ -100,6 +96,104 @@ pub fn context_window_for_model_id(model: &str) -> Option<u64> {
         .find_map(|(pattern, mode, window)| {
             matches_context_pattern(&lower, pattern, *mode).then_some(*window)
         })
+}
+
+/// Returns whether a raw model id identifies a model family with image input.
+///
+/// This conservative capability hint is intended for local and
+/// OpenAI-compatible runtimes that cannot report a model profile. Unknown ids
+/// return `false`; an authoritative [`ModelProfile`] should take precedence
+/// when one is available.
+pub fn model_id_supports_vision(model: &str) -> bool {
+    const VISION_FAMILIES: &[&str] = &[
+        "moondream",
+        "llava",
+        "llava-llama3",
+        "llava-phi3",
+        "bakllava",
+        "llama3.2-vision",
+        "llama4",
+        "minicpm-v",
+        "granite3.2-vision",
+        "qwen2-vl",
+        "qwen2.5vl",
+        "mistral-small3.1",
+        "mistral-small3.2",
+        "gemma4",
+    ];
+    const TEXT_ONLY_FAMILIES: &[&str] = &["gemma3n"];
+    const VISION_MARKERS: &[&str] = &["llava", "moondream", "bakllava", "vision"];
+
+    let normalized = model.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    let (family, tag) = normalized
+        .split_once(':')
+        .unwrap_or((normalized.as_str(), ""));
+
+    if TEXT_ONLY_FAMILIES.contains(&family) {
+        return false;
+    }
+    if family == "gemma3" {
+        return tag.is_empty()
+            || tag == "latest"
+            || !(tag.starts_with("270m") || tag.starts_with("1b"));
+    }
+    VISION_FAMILIES.contains(&family)
+        || VISION_MARKERS
+            .iter()
+            .any(|marker| normalized.contains(marker))
+}
+
+/// Matches a model id against a case-insensitive `*` wildcard pattern.
+///
+/// `*` is the only metacharacter. A pattern without it matches the complete
+/// model id.
+pub fn model_id_glob_match(pattern: &str, model: &str) -> bool {
+    let pattern = pattern.to_ascii_lowercase();
+    let model = model.to_ascii_lowercase();
+    let segments: Vec<&str> = pattern.split('*').collect();
+    if segments.len() == 1 {
+        return pattern == model;
+    }
+    let mut remaining = model.as_str();
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.is_empty() {
+            continue;
+        }
+        if index == 0 {
+            if !remaining.starts_with(segment) {
+                return false;
+            }
+            remaining = &remaining[segment.len()..];
+        } else if let Some(offset) = remaining.find(segment) {
+            remaining = &remaining[offset + segment.len()..];
+        } else {
+            return false;
+        }
+    }
+    pattern.ends_with('*') || remaining.is_empty()
+}
+
+/// Resolves the temperature to send for a model call.
+///
+/// A matching unsupported-model pattern suppresses the field. Otherwise a
+/// configured override wins over the request temperature.
+pub fn effective_temperature(
+    model: &str,
+    request_temperature: Option<f64>,
+    temperature_override: Option<f64>,
+    temperature_unsupported: &[String],
+) -> Option<f64> {
+    if temperature_unsupported
+        .iter()
+        .any(|pattern| model_id_glob_match(pattern, model))
+    {
+        None
+    } else {
+        temperature_override.or(request_temperature)
+    }
 }
 
 impl std::fmt::Display for ProviderError {

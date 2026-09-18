@@ -18,6 +18,15 @@ const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 /// Default dimensionality of `text-embedding-3-small`.
 const DEFAULT_DIMENSIONS: usize = 1536;
 
+/// OpenAI embedding models that accept the optional `dimensions` parameter.
+pub const MODELS_SUPPORTING_DIMENSIONS: [&str; 2] =
+    ["text-embedding-3-small", "text-embedding-3-large"];
+
+/// Returns whether `model` accepts an explicit output dimension override.
+pub fn model_supports_dimensions(model: &str) -> bool {
+    model.starts_with("text-embedding-3-")
+}
+
 /// An [`EmbeddingModel`] backed by the hosted OpenAI embeddings endpoint
 /// (`POST {base_url}/embeddings`).
 ///
@@ -97,7 +106,11 @@ impl OpenAiEmbeddingModel {
 
     /// Overrides the reported dimensionality (and requests it from the API
     /// via the `dimensions` parameter, which `text-embedding-3-*` supports).
-    /// A zero value is rejected by [`EmbeddingModel::embed`] before network I/O.
+    ///
+    /// Zero enables dimension-discovery mode: the request omits `dimensions`
+    /// and accepts the vector length returned by the provider. Callers should
+    /// persist that discovered length before constructing a fixed-size vector
+    /// store.
     pub fn with_dimensions(mut self, dimensions: usize) -> Self {
         self.dimensions = dimensions;
         self
@@ -175,11 +188,6 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
-        }
-        if self.dimensions == 0 {
-            return Err(Error::Validation(
-                "embedding dimensions must be greater than zero".into(),
-            ));
         }
         if let Some(index) = texts.iter().position(|text| text.trim().is_empty()) {
             return Err(Error::Validation(format!(

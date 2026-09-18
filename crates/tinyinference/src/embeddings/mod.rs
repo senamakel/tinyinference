@@ -296,7 +296,7 @@ pub use ollama::{
     DEFAULT_OLLAMA_DIMENSIONS, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, OllamaEmbeddingModel,
     RECOMMENDED_OLLAMA_CONTEXT_TOKENS,
 };
-pub use openai::OpenAiEmbeddingModel;
+pub use openai::{MODELS_SUPPORTING_DIMENSIONS, OpenAiEmbeddingModel, model_supports_dimensions};
 pub use rate_limit::{DEFAULT_REQUESTS_PER_MINUTE, acquire, rate_limit, set_rate_limit};
 pub use retry_after::{
     BASE_BACKOFF_MS, MAX_BACKOFF_MS, MAX_RETRIES, backoff_ms_for_attempt, parse_retry_after_ms,

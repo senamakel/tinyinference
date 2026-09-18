@@ -100,7 +100,53 @@ fn o1_o3_context_patterns_require_segment_boundaries() {
     assert_eq!(context_window_for_model_id("octo3thing"), None);
     assert_eq!(
         context_window_for_model_id("ollama/mistral-for-o1-benchmark"),
+        Some(200_000)
+    );
+}
+
+#[test]
+fn model_id_vision_capability_is_conservative() {
+    for model in [
+        "moondream:1.8b-v2-q4_K_S",
+        "llava:7b",
+        "llama3.2-vision:11b",
+        "qwen2.5vl:7b",
+        "gemma3:4b-it-qat",
+        "gemma3:latest",
+        "gemma4:e4b-it-q8_0",
+        "hf.co/user/llava-v1.6-mistral-7b",
+    ] {
+        assert!(model_id_supports_vision(model), "{model}");
+    }
+    for model in [
+        "",
+        "gemma3:270m-it-qat",
+        "gemma3:1b",
+        "gemma3n:e4b-it-q8_0",
+        "llama3.1:8b",
+        "qwen2.5:14b",
+        "bge-m3",
+    ] {
+        assert!(!model_id_supports_vision(model), "{model}");
+    }
+}
+
+#[test]
+fn model_id_globs_and_temperature_policy_are_provider_neutral() {
+    assert!(model_id_glob_match("o1*", "O1-preview"));
+    assert!(model_id_glob_match("*turbo", "gpt-4-turbo"));
+    assert!(model_id_glob_match("*mid*", "a-middle-b"));
+    assert!(!model_id_glob_match("gpt-4o", "gpt-4o-mini"));
+    assert!(!model_id_glob_match("foo*foo", "foo"));
+
+    let unsupported = vec!["o1*".to_string(), "gpt-5*".to_string()];
+    assert_eq!(
+        effective_temperature("o1-preview", Some(0.7), Some(0.2), &unsupported),
         None
+    );
+    assert_eq!(
+        effective_temperature("gpt-4o", Some(0.7), Some(0.2), &unsupported),
+        Some(0.2)
     );
 }
 

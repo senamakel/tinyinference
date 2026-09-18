@@ -14,8 +14,10 @@ The crate provides:
   and Mistral;
 - OpenAI, Cohere, Ollama, Voyage, cloud, no-op, and deterministic mock
   embeddings;
-- request caching, stream accumulation, normalized provider failures, and
-  provider-neutral retry classification.
+- request caching, stream accumulation, normalized provider failures,
+  provider-neutral retry classification and `Retry-After` parsing;
+- conservative context-window and vision-capability hints for raw model ids
+  when a provider cannot supply an authoritative model profile.
 
 ## Use
 
@@ -50,7 +52,7 @@ crates/tinyinference/
     ├── model/      ChatModel, request/response, profiles, and streaming
     ├── providers/  mock and OpenAI-compatible transports
     ├── error.rs    crate-wide Error and Result
-    ├── failure.rs  normalized provider-failure classification
+    ├── failure.rs  provider-failure classification and retry hints
     ├── tool.rs     model-visible tool schemas and call/delta shapes
     └── usage/      normalized token accounting
 ```
