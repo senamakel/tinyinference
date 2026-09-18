@@ -54,6 +54,14 @@ fn kind_from_str_loose_accepts_aliases() {
         LocalProviderKind::from_str_loose("vllm"),
         Some(LocalProviderKind::LocalOpenai)
     );
+    assert_eq!(
+        LocalProviderKind::from_str_loose("custom-openai"),
+        Some(LocalProviderKind::LocalOpenai)
+    );
+    assert_eq!(
+        LocalProviderKind::from_str_loose("custom_openai"),
+        Some(LocalProviderKind::LocalOpenai)
+    );
     assert_eq!(LocalProviderKind::from_str_loose("unknown"), None);
 }
 
@@ -64,6 +72,8 @@ fn kind_from_provider_string_parses_prefixes() {
         ("mlx", LocalProviderKind::Mlx),
         ("omlx", LocalProviderKind::Omlx),
         ("local-openai", LocalProviderKind::LocalOpenai),
+        ("custom-openai", LocalProviderKind::LocalOpenai),
+        ("custom_openai", LocalProviderKind::LocalOpenai),
     ] {
         assert_eq!(kind_from_provider_string(provider), Some(expected));
         assert!(is_local_provider_string(provider));

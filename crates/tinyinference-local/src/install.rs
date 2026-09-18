@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::{Error, Result};
+
 /// Name of the Inno Setup installer process. On Windows the installer is
 /// spawned via PowerShell's `Start-Process`, which creates a top-level
 /// process — it survives the parent OpenHuman process dying. If OpenHuman
@@ -51,13 +53,13 @@ pub struct InstallResult {
 }
 
 /// Run the platform-specific Ollama install into the workspace and capture stdout/stderr.
-pub async fn run_ollama_install_script(install_dir: &Path) -> Result<InstallResult, String> {
-    let mut cmd = build_install_command(install_dir)?;
+pub async fn run_ollama_install_script(install_dir: &Path) -> Result<InstallResult> {
+    let mut cmd = build_install_command(install_dir).map_err(Error::Install)?;
 
     let output = cmd
         .output()
         .await
-        .map_err(|e| format!("failed to execute Ollama installer: {e}"))?;
+        .map_err(|e| Error::Install(format!("failed to execute Ollama installer: {e}")))?;
 
     tracing::debug!(
         "[local_ai] Ollama install script finished (dir={} exit={}) stdout={} stderr={}",
@@ -110,7 +112,9 @@ pub(crate) fn resolve_powershell_executable() -> std::ffi::OsString {
     std::ffi::OsString::from("powershell")
 }
 
-fn build_install_command(install_dir: &Path) -> Result<tokio::process::Command, String> {
+fn build_install_command(
+    install_dir: &Path,
+) -> std::result::Result<tokio::process::Command, String> {
     #[cfg(target_os = "windows")]
     {
         let powershell_exe = resolve_powershell_executable();

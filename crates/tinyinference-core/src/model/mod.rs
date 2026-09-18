@@ -116,6 +116,7 @@ pub fn model_id_supports_vision(model: &str) -> bool {
         "minicpm-v",
         "granite3.2-vision",
         "qwen2-vl",
+        "qwen2.5-vl",
         "qwen2.5vl",
         "mistral-small3.1",
         "mistral-small3.2",
@@ -128,9 +129,8 @@ pub fn model_id_supports_vision(model: &str) -> bool {
     if normalized.is_empty() {
         return false;
     }
-    let (family, tag) = normalized
-        .split_once(':')
-        .unwrap_or((normalized.as_str(), ""));
+    let unqualified = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    let (family, tag) = unqualified.split_once(':').unwrap_or((unqualified, ""));
 
     if TEXT_ONLY_FAMILIES.contains(&family) {
         return false;
@@ -140,7 +140,9 @@ pub fn model_id_supports_vision(model: &str) -> bool {
             || tag == "latest"
             || !(tag.starts_with("270m") || tag.starts_with("1b"));
     }
-    VISION_FAMILIES.contains(&family)
+    VISION_FAMILIES
+        .iter()
+        .any(|known| family == *known || family.starts_with(&format!("{known}-")))
         || VISION_MARKERS.iter().any(|marker| {
             normalized
                 .split(|character: char| !character.is_ascii_alphanumeric())

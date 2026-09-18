@@ -93,9 +93,8 @@ impl LocalProviderKind {
             "lmstudio" | "lm-studio" | "lm_studio" => Some(Self::LmStudio),
             "mlx" | "mlx-server" | "mlx_lm" => Some(Self::Mlx),
             "omlx" | "omlx-server" => Some(Self::Omlx),
-            "local-openai" | "local_openai" | "llamacpp" | "llama.cpp" | "vllm" => {
-                Some(Self::LocalOpenai)
-            }
+            "local-openai" | "local_openai" | "custom-openai" | "custom_openai" | "llamacpp"
+            | "llama.cpp" | "vllm" => Some(Self::LocalOpenai),
             _ => None,
         }
     }

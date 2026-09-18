@@ -115,6 +115,8 @@ fn model_id_vision_capability_is_conservative() {
         "gemma3:latest",
         "gemma4:e4b-it-q8_0",
         "hf.co/user/llava-v1.6-mistral-7b",
+        "Qwen/Qwen2.5-VL-7B-Instruct",
+        "hf.co/user/gemma3:4b",
     ] {
         assert!(model_id_supports_vision(model), "{model}");
     }
