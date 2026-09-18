@@ -39,6 +39,31 @@ impl ChatModel<()> for FailingModel {
     }
 }
 
+struct ScriptedStreamModel {
+    items: Vec<ModelStreamItem>,
+    metadata: ModelStreamMetadata,
+}
+
+impl ScriptedStreamModel {
+    fn new(items: Vec<ModelStreamItem>, metadata: ModelStreamMetadata) -> Self {
+        Self { items, metadata }
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for ScriptedStreamModel {
+    async fn invoke(&self, _state: &(), _request: ModelRequest) -> crate::Result<ModelResponse> {
+        Ok(ModelResponse::assistant("not used by stream tests"))
+    }
+
+    async fn stream(&self, _state: &(), _request: ModelRequest) -> crate::Result<ModelStream> {
+        Ok(
+            ModelStream::new(Box::pin(futures::stream::iter(self.items.clone())))
+                .with_metadata(self.metadata.clone()),
+        )
+    }
+}
+
 #[derive(Default)]
 struct RecordingObserver(Mutex<Vec<ModelCallObservation>>);
 
@@ -191,21 +216,65 @@ async fn stream_metadata_and_abort_guard_follow_the_consumer_lifetime() {
     assert!(producer.await.unwrap_err().is_cancelled());
 }
 
-#[tokio::test]
-async fn completed_stream_disarms_its_abort_guard() {
-    let producer = tokio::spawn(std::future::pending::<()>());
+#[test]
+fn stream_metadata_serializes_with_defaults_and_stamps_terminal_responses() {
+    assert_eq!(
+        serde_json::to_value(ModelStreamMetadata::default()).unwrap(),
+        serde_json::json!({})
+    );
+
+    let correlation = ModelCallCorrelation::new("run", "call");
+    let route = ResolvedModelRoute::new("mock", "model", "route");
+    let metadata = ModelStreamMetadata {
+        correlation: Some(correlation.clone()),
+        resolved_route: Some(route.clone()),
+    };
+    assert_eq!(
+        serde_json::from_value::<ModelStreamMetadata>(serde_json::to_value(&metadata).unwrap())
+            .unwrap(),
+        metadata
+    );
+
     let stream = ModelStream::new(Box::pin(futures::stream::iter(vec![
         ModelStreamItem::Completed(ModelResponse::assistant("done")),
     ])))
-    .abort_on_drop(AbortOnDrop::from_join_handle(&producer));
-    let _ = stream.collect::<Vec<_>>().await;
-    tokio::task::yield_now().await;
-    assert!(
-        !producer.is_finished(),
-        "terminal streams must not abort producers"
-    );
-    producer.abort();
-    assert!(producer.await.unwrap_err().is_cancelled());
+    .with_correlation(correlation.clone())
+    .with_resolved_route(route.clone());
+    assert_eq!(stream.metadata(), &metadata);
+
+    let items = futures::executor::block_on(stream.collect::<Vec<_>>());
+    let Some(ModelStreamItem::Completed(response)) = items.last() else {
+        panic!("stream must complete");
+    };
+    assert_eq!(response.correlation.as_ref(), Some(&correlation));
+    assert_eq!(response.resolved_route.as_ref(), Some(&route));
+}
+
+#[tokio::test]
+async fn every_terminal_stream_item_disarms_its_abort_guard() {
+    let terminal_items = vec![
+        ModelStreamItem::Completed(ModelResponse::assistant("done")),
+        ModelStreamItem::Failed("failed".to_string()),
+        ModelStreamItem::ProviderFailed(ProviderError {
+            provider: "mock".to_string(),
+            message: "provider failed".to_string(),
+            ..ProviderError::default()
+        }),
+    ];
+
+    for item in terminal_items {
+        let producer = tokio::spawn(std::future::pending::<()>());
+        let stream = ModelStream::new(Box::pin(futures::stream::iter(vec![item])))
+            .abort_on_drop(AbortOnDrop::from_join_handle(&producer));
+        let _ = stream.collect::<Vec<_>>().await;
+        tokio::task::yield_now().await;
+        assert!(
+            !producer.is_finished(),
+            "terminal streams must not abort producers"
+        );
+        producer.abort();
+        assert!(producer.await.unwrap_err().is_cancelled());
+    }
 }
 
 #[tokio::test]
@@ -285,4 +354,84 @@ async fn observer_reports_each_terminal_outcome_once() {
         ModelCallObservation::Failed { .. }
     ));
     assert_eq!(observations.len(), 5);
+}
+
+#[tokio::test]
+async fn observer_streams_report_one_terminal_outcome_with_stream_metadata() {
+    let correlation = ModelCallCorrelation::new("stream-run", "stream-call");
+    let metadata = ModelStreamMetadata {
+        correlation: Some(correlation.clone()),
+        resolved_route: Some(ResolvedModelRoute::new("mock", "model", "route")),
+    };
+    let observer = Arc::new(RecordingObserver::default());
+    let success = ObservingModel::new(
+        Arc::new(ScriptedStreamModel::new(
+            vec![
+                ModelStreamItem::Completed(ModelResponse::assistant("ok")),
+                ModelStreamItem::Failed("ignored after completion".to_string()),
+            ],
+            metadata.clone(),
+        )),
+        observer.clone(),
+    );
+    let cached = ObservingModel::new(
+        Arc::new(ScriptedStreamModel::new(
+            vec![ModelStreamItem::Completed(ModelResponse {
+                served_from_cache: true,
+                ..ModelResponse::assistant("cached")
+            })],
+            metadata.clone(),
+        )),
+        observer.clone(),
+    );
+    let failed = ObservingModel::new(
+        Arc::new(ScriptedStreamModel::new(
+            vec![ModelStreamItem::Failed("stream failed".to_string())],
+            metadata.clone(),
+        )),
+        observer.clone(),
+    );
+    let provider_failed = ObservingModel::new(
+        Arc::new(ScriptedStreamModel::new(
+            vec![ModelStreamItem::ProviderFailed(ProviderError {
+                provider: "mock".to_string(),
+                message: "provider failed".to_string(),
+                ..ProviderError::default()
+            })],
+            metadata,
+        )),
+        observer.clone(),
+    );
+
+    for model in [&success, &cached, &failed, &provider_failed] {
+        model
+            .stream(&(), ModelRequest::default())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+    }
+
+    let observations = observer.0.lock().unwrap();
+    assert_eq!(observations.len(), 4);
+    assert!(matches!(
+        &observations[0],
+        ModelCallObservation::Succeeded { correlation: observed, .. }
+            if observed.as_ref() == Some(&correlation)
+    ));
+    assert!(matches!(
+        &observations[1],
+        ModelCallObservation::CacheHit { correlation: observed, .. }
+            if observed.as_ref() == Some(&correlation)
+    ));
+    assert!(matches!(
+        &observations[2],
+        ModelCallObservation::Failed { correlation: observed, message }
+            if observed.as_ref() == Some(&correlation) && message == "stream failed"
+    ));
+    assert!(matches!(
+        &observations[3],
+        ModelCallObservation::Failed { correlation: observed, message }
+            if observed.as_ref() == Some(&correlation) && message == "mock returned: provider failed"
+    ));
 }

@@ -76,6 +76,10 @@ impl EmbeddingModel for WrongDimensionsEmbeddingModel {
 
 struct UsageEmbeddingModel;
 
+struct FailingCancelledEmbeddingModel {
+    cancellation: EmbeddingCancellation,
+}
+
 struct SlowEmbeddingModel {
     started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     dropped: Arc<AtomicBool>,
@@ -137,6 +141,28 @@ impl EmbeddingModel for UsageEmbeddingModel {
         Ok((
             vec![vec![1.0, 0.0]; texts.len()],
             Some(EmbeddingUsage::new(17)),
+        ))
+    }
+
+    fn dimensions(&self) -> usize {
+        2
+    }
+}
+
+#[async_trait::async_trait]
+impl EmbeddingModel for FailingCancelledEmbeddingModel {
+    fn name(&self) -> &str {
+        "failing-cancelled"
+    }
+
+    fn model_id(&self) -> &str {
+        "failing-cancelled"
+    }
+
+    async fn embed(&self, _texts: &[String]) -> crate::Result<Vec<Vec<f32>>> {
+        self.cancellation.cancel();
+        Err(crate::Error::Embedding(
+            "provider failed after cancellation".to_string(),
         ))
     }
 
@@ -208,6 +234,23 @@ async fn embedding_request_cancellation_drops_an_in_flight_provider_operation() 
     let error = task.await.unwrap().unwrap_err();
     assert!(matches!(error, crate::Error::Cancelled));
     assert!(dropped.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn embedding_request_prefers_cancellation_when_provider_fails_after_cancelling() {
+    let cancellation = EmbeddingCancellation::new();
+    let model = FailingCancelledEmbeddingModel {
+        cancellation: cancellation.clone(),
+    };
+
+    let error = model
+        .embed_request(
+            EmbeddingRequest::new(vec!["input".to_string()]).with_cancellation(cancellation),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, crate::Error::Cancelled));
 }
 
 #[test]

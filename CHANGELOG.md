@@ -4,8 +4,9 @@
 
 ### Breaking changes
 
-- `ModelStream` is a metadata-owning stream struct. Replace direct
-  `Box::pin(stream)` returns with `ModelStream::new(Box::pin(stream))`.
+- `ModelStream` is a metadata-owning stream struct. This source-breaking change
+  means custom `ChatModel` implementations must replace direct
+  `Ok(Box::pin(stream))` returns with `Ok(ModelStream::new(Box::pin(stream)))`.
 - `ModelRequest` now distinguishes `model` from `requested_route`. Hosts must
   use `with_requested_route` when fallback observability needs a route name.
 - `ModelResponse` includes `correlation` and `resolved_route`; custom response

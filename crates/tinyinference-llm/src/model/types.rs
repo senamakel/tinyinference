@@ -752,7 +752,16 @@ impl ModelStream {
     #[must_use]
     pub fn with_resolved_route(mut self, route: ResolvedModelRoute) -> Self {
         self.metadata.resolved_route = Some(route);
-        self
+        let route = self.metadata.resolved_route.clone();
+        self.map_items(move |item| match item {
+            ModelStreamItem::Completed(mut response) => {
+                if response.resolved_route.is_none() {
+                    response.resolved_route.clone_from(&route);
+                }
+                ModelStreamItem::Completed(response)
+            }
+            other => other,
+        })
     }
 
     /// Aborts a detached producer if this stream is dropped before completion.

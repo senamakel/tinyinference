@@ -290,6 +290,22 @@ pub struct ObservingModel<State: Send + Sync> {
     observer: Arc<dyn ModelObserver>,
 }
 
+/// The small request projection needed after a model call completes.
+#[derive(Clone, Debug, Default)]
+struct ObservedRequest {
+    correlation: Option<ModelCallCorrelation>,
+    requested_route: Option<String>,
+}
+
+impl ObservedRequest {
+    fn from_request(request: &ModelRequest) -> Self {
+        Self {
+            correlation: request.correlation.clone(),
+            requested_route: request.requested_route.clone(),
+        }
+    }
+}
+
 impl<State: Send + Sync> std::fmt::Debug for ObservingModel<State> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -307,7 +323,7 @@ impl<State: Send + Sync> ObservingModel<State> {
 }
 
 fn observation_for_response(
-    request: &ModelRequest,
+    request: &ObservedRequest,
     response: &ModelResponse,
 ) -> ModelCallObservation {
     let correlation = response
@@ -351,15 +367,16 @@ impl<State: Send + Sync> ChatModel<State> for ObservingModel<State> {
     }
 
     async fn invoke(&self, state: &State, request: ModelRequest) -> Result<ModelResponse> {
-        match self.inner.invoke(state, request.clone()).await {
+        let observed_request = ObservedRequest::from_request(&request);
+        match self.inner.invoke(state, request).await {
             Ok(response) => {
                 self.observer
-                    .observe(observation_for_response(&request, &response));
+                    .observe(observation_for_response(&observed_request, &response));
                 Ok(response)
             }
             Err(error) => {
                 self.observer.observe(ModelCallObservation::Failed {
-                    correlation: request.correlation,
+                    correlation: observed_request.correlation,
                     message: error.to_string(),
                 });
                 Err(error)
@@ -368,11 +385,12 @@ impl<State: Send + Sync> ChatModel<State> for ObservingModel<State> {
     }
 
     async fn stream(&self, state: &State, request: ModelRequest) -> Result<ModelStream> {
-        let stream = match self.inner.stream(state, request.clone()).await {
+        let observed_request = ObservedRequest::from_request(&request);
+        let stream = match self.inner.stream(state, request).await {
             Ok(stream) => stream,
             Err(error) => {
                 self.observer.observe(ModelCallObservation::Failed {
-                    correlation: request.correlation,
+                    correlation: observed_request.correlation,
                     message: error.to_string(),
                 });
                 return Err(error);
@@ -395,7 +413,7 @@ impl<State: Send + Sync> ChatModel<State> for ObservingModel<State> {
                     if response.resolved_route.is_none() {
                         response.resolved_route = stream_metadata.resolved_route.clone();
                     }
-                    observer.observe(observation_for_response(&request, &response));
+                    observer.observe(observation_for_response(&observed_request, &response));
                 }
                 ModelStreamItem::Failed(message) => {
                     observed = true;
@@ -403,7 +421,7 @@ impl<State: Send + Sync> ChatModel<State> for ObservingModel<State> {
                         correlation: stream_metadata
                             .correlation
                             .clone()
-                            .or_else(|| request.correlation.clone()),
+                            .or_else(|| observed_request.correlation.clone()),
                         message: message.clone(),
                     });
                 }
@@ -413,7 +431,7 @@ impl<State: Send + Sync> ChatModel<State> for ObservingModel<State> {
                         correlation: stream_metadata
                             .correlation
                             .clone()
-                            .or_else(|| request.correlation.clone()),
+                            .or_else(|| observed_request.correlation.clone()),
                         message: error.to_string(),
                     });
                 }

@@ -199,13 +199,14 @@ pub trait EmbeddingModel: Send + Sync {
             return Err(crate::Error::Cancelled);
         }
         let cancellation = request.cancellation.clone();
-        let (vectors, usage) = tokio::select! {
-            result = self.embed_with_usage(&request.inputs) => result?,
+        let result = tokio::select! {
+            result = self.embed_with_usage(&request.inputs) => result,
             () = cancellation.cancelled() => return Err(crate::Error::Cancelled),
         };
         if request.cancellation.is_cancelled() {
             return Err(crate::Error::Cancelled);
         }
+        let (vectors, usage) = result?;
         if vectors.len() != request.inputs.len() {
             return Err(crate::Error::Validation(format!(
                 "embedding batch returned {} vectors for {} inputs",
