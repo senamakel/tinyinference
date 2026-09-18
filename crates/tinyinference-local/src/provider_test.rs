@@ -71,4 +71,12 @@ fn model_discovery_api_uses_v1_models_for_openai_compatible() {
         model_discovery_api("local-openai", "http://localhost:1234"),
         ModelDiscoveryApi::OpenAiModels
     );
+    assert_eq!(
+        model_discovery_api("mlx", "http://localhost:8080"),
+        ModelDiscoveryApi::OpenAiModels
+    );
+    assert_eq!(
+        model_discovery_api("mlx-server", "http://localhost:8080"),
+        ModelDiscoveryApi::OpenAiModels
+    );
 }

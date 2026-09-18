@@ -51,7 +51,6 @@
 //! # });
 //! ```
 
-pub mod catalog;
 mod types;
 
 pub use types::*;
@@ -245,7 +244,7 @@ impl Retriever {
     /// metadata in stores that support in-place update (such as
     /// [`InMemoryVectorStore`]).
     pub async fn index(&self, docs: Vec<(String, String, Value)>) -> Result<()> {
-        if docs.is_empty() || self.model.dimensions() == 0 {
+        if docs.is_empty() || !self.model.is_enabled() {
             return Ok(());
         }
         let texts: Vec<String> = docs.iter().map(|(_, text, _)| text.clone()).collect();
@@ -275,7 +274,7 @@ impl Retriever {
     /// with a different embedding model. An empty store never errors: it
     /// answers every query with no hits.
     pub async fn retrieve(&self, query: &str, top_k: usize) -> Result<Vec<ScoredDoc>> {
-        if self.model.dimensions() == 0 {
+        if !self.model.is_enabled() {
             return Ok(Vec::new());
         }
         let query_vector = self.model.embed_query(query).await?;

@@ -8,6 +8,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// A normalized local inference failure.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// A caller supplied an invalid local-runtime identifier or option.
+    #[error("invalid local inference input: {0}")]
+    InvalidInput(String),
+    /// Another install for the same engine is already running.
+    #[error("local inference install already in progress: {0}")]
+    InstallInProgress(String),
+    /// A local runtime installation failed outside the download transport.
+    #[error("local inference install error: {0}")]
+    Install(String),
     /// A local artifact could not be read or written.
     #[error("download I/O error: {0}")]
     DownloadIo(String),

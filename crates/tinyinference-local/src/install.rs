@@ -275,7 +275,7 @@ pub fn find_system_ollama_binary() -> Option<PathBuf> {
         .filter(|v| !v.trim().is_empty())
     {
         let path = PathBuf::from(from_env);
-        if path.is_file() {
+        if is_executable_file(&path) {
             return Some(path);
         }
     }
@@ -288,7 +288,7 @@ pub fn find_system_ollama_binary() -> Option<PathBuf> {
     if let Some(path_var) = std::env::var_os("PATH") {
         for entry in std::env::split_paths(&path_var) {
             let candidate = entry.join(binary_name);
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 return Some(candidate);
             }
         }
@@ -317,7 +317,7 @@ pub fn find_system_ollama_binary() -> Option<PathBuf> {
             );
         }
         for candidate in candidates {
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 tracing::debug!(
                     "[local_ai] found system Ollama at common Windows path: {}",
                     candidate.display()
@@ -344,7 +344,7 @@ pub fn find_system_ollama_binary() -> Option<PathBuf> {
             candidates.push(PathBuf::from(home).join(&bundle_rel));
         }
         for candidate in candidates {
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 tracing::debug!(
                     "[local_ai] found system Ollama at macOS path: {}",
                     candidate.display()
@@ -360,13 +360,27 @@ pub fn find_system_ollama_binary() -> Option<PathBuf> {
             PathBuf::from("/usr/bin/ollama"),
         ];
         for candidate in common {
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 return Some(candidate);
             }
         }
     }
 
     None
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]

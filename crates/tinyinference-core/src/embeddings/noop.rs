@@ -11,6 +11,10 @@ pub struct NoopEmbeddingModel;
 
 #[async_trait]
 impl EmbeddingModel for NoopEmbeddingModel {
+    fn is_enabled(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &str {
         "none"
     }

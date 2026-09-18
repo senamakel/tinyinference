@@ -39,6 +39,15 @@ use crate::Result;
 ///   deterministic implementations such as [`MockEmbeddingModel`].
 #[async_trait]
 pub trait EmbeddingModel: Send + Sync {
+    /// Whether semantic indexing and retrieval are enabled for this model.
+    ///
+    /// A zero value from [`Self::dimensions`] may mean dimensions have not yet
+    /// been discovered, so callers must use this explicit capability instead
+    /// of treating zero dimensions as disabled.
+    fn is_enabled(&self) -> bool {
+        true
+    }
+
     /// Stable provider identifier, such as `"openai"` or `"ollama"`.
     fn name(&self) -> &str;
 

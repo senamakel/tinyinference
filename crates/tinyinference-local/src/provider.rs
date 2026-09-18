@@ -105,6 +105,8 @@ pub fn model_discovery_api(provider: &str, base_url: &str) -> ModelDiscoveryApi 
             | "lm_studio"
             | "omlx"
             | "omlx-server"
+            | "mlx"
+            | "mlx-server"
             | "local-openai"
             | "local_openai"
             | "custom-openai"

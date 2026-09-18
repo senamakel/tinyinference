@@ -55,35 +55,28 @@ fn temp_install() -> (tempfile::TempDir, PiperInstall) {
 fn decode_voice_id_splits_correctly() {
     assert_eq!(
         decode_voice_id("en_US-lessac-medium"),
-        (
+        Some((
             "en".to_string(),
             "en_US".to_string(),
             "lessac".to_string(),
             "medium".to_string()
-        )
+        ))
     );
     assert_eq!(
         decode_voice_id("de_DE-thorsten-high"),
-        (
+        Some((
             "de".to_string(),
             "de_DE".to_string(),
             "thorsten".to_string(),
             "high".to_string()
-        )
+        ))
     );
 }
 
 #[test]
-fn decode_voice_id_falls_back_for_garbage() {
-    // Single-piece input is malformed → bundled default decomposition.
-    let (lang, locale, name, quality) = decode_voice_id("garbage");
-    assert_eq!(lang, "en");
-    assert_eq!(locale, "en_US");
-    assert_eq!(name, "lessac");
-    assert_eq!(quality, "medium");
-
-    let (_lang, _locale, _name, _quality) = decode_voice_id("");
-    // Empty string also produces the bundled default — guarded above.
+fn decode_voice_id_rejects_garbage_and_defaults_empty() {
+    assert!(decode_voice_id("garbage").is_none());
+    assert!(decode_voice_id("").is_some());
 }
 
 #[test]
@@ -103,7 +96,7 @@ fn voice_paths_reject_path_traversal_and_absolute_paths() {
 
 #[test]
 fn voice_download_urls_anchor_on_hf_bucket() {
-    let (onnx, json) = voice_download_urls("en_US-lessac-medium");
+    let (onnx, json) = voice_download_urls("en_US-lessac-medium").unwrap();
     assert!(onnx.starts_with("https://huggingface.co/rhasspy/piper-voices/resolve/main/"));
     assert!(onnx.ends_with("en_US-lessac-medium.onnx"));
     assert!(json.ends_with("en_US-lessac-medium.onnx.json"));
@@ -218,6 +211,11 @@ fn status_promotes_to_installed_when_voice_and_binary_present() {
     let bin_candidate = install.binary_candidates()[0].clone();
     std::fs::create_dir_all(bin_candidate.parent().unwrap()).unwrap();
     std::fs::write(&bin_candidate, b"stub").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin_candidate, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     let snapshot = status(&install, DEFAULT_PIPER_VOICE);
     assert_eq!(snapshot.state, VoiceInstallState::Installed);
@@ -261,8 +259,38 @@ async fn public_installer_owns_the_install_slot() {
     let error = install_piper(&install, None, false)
         .await
         .expect_err("a direct concurrent caller must be rejected");
-    assert!(error.contains("already in progress"), "{error}");
+    assert!(
+        matches!(error, crate::Error::InstallInProgress(_)),
+        "{error}"
+    );
     drop(held);
+}
+
+#[tokio::test]
+async fn public_installer_rejects_malformed_voice_id_before_download() {
+    let (_tmp, install) = temp_install();
+    let error = install_piper(&install, Some("lessac".to_string()), false)
+        .await
+        .expect_err("malformed voice IDs must be rejected");
+    assert!(matches!(error, crate::Error::InvalidInput(_)), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn status_rejects_non_executable_binary() {
+    let _g = shared_install_lock();
+    reset_status(ENGINE_PIPER);
+    let (_tmp, install) = temp_install();
+    let (onnx, json) = install.voice_paths(DEFAULT_PIPER_VOICE).unwrap();
+    std::fs::create_dir_all(onnx.parent().unwrap()).unwrap();
+    std::fs::write(&onnx, vec![0u8; (MIN_VOICE_BYTES + 1024) as usize]).unwrap();
+    std::fs::write(&json, synthetic_voice_json()).unwrap();
+    let binary = install.binary_candidates()[0].clone();
+    std::fs::write(&binary, b"stub").unwrap();
+
+    let snapshot = status(&install, DEFAULT_PIPER_VOICE);
+
+    assert_eq!(snapshot.state, VoiceInstallState::Missing);
 }
 
 #[test]

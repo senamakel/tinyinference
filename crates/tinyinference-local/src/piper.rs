@@ -13,6 +13,7 @@ use crate::download::{
     ENGINE_PIPER, VoiceInstallState, VoiceInstallStatus, download_to_file, read_status,
     try_acquire_install_slot, write_status,
 };
+use crate::{Error, Result};
 
 const LOG_PREFIX: &str = "[voice-install:piper]";
 
@@ -156,13 +157,13 @@ fn binary_asset_for(os: &str, arch: &str, base: &str) -> Option<BinaryAsset> {
 }
 
 /// Voice file URLs on HuggingFace. Returns `(onnx_url, onnx_json_url)`.
-fn voice_download_urls(voice_id: &str) -> (String, String) {
+fn voice_download_urls(voice_id: &str) -> Option<(String, String)> {
     // The Piper voices repo uses the structure:
     //   en/en_US/lessac/medium/en_US-lessac-medium.onnx
     //   en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
     // We only support the bundled default — multi-voice support is
     // tracked separately. The path components mirror the voice id.
-    let (lang_short, locale, name, quality) = decode_voice_id(voice_id);
+    let (lang_short, locale, name, quality) = decode_voice_id(voice_id)?;
     let base = match piper_base_override("OPENHUMAN_PIPER_VOICES_BASE_URL") {
         Some(root) => format!("{root}/{lang_short}/{locale}/{name}/{quality}"),
         None => format!(
@@ -170,18 +171,16 @@ fn voice_download_urls(voice_id: &str) -> (String, String) {
         ),
     };
     let stem = format!("{locale}-{name}-{quality}");
-    (
+    Some((
         format!("{base}/{stem}.onnx"),
         format!("{base}/{stem}.onnx.json"),
-    )
+    ))
 }
 
 /// Decompose `en_US-lessac-medium` into its repo-path pieces.
 ///
 /// Returns `(short_lang, locale, voice_name, quality)`.
-fn decode_voice_id(voice_id: &str) -> (String, String, String, String) {
-    // Fall back to the bundled default if the id is malformed — the
-    // installer should never panic on user-typed input.
+fn decode_voice_id(voice_id: &str) -> Option<(String, String, String, String)> {
     let trimmed = voice_id.trim();
     let id = if trimmed.is_empty() {
         DEFAULT_PIPER_VOICE
@@ -190,21 +189,13 @@ fn decode_voice_id(voice_id: &str) -> (String, String, String, String) {
     };
     let parts: Vec<&str> = id.split('-').collect();
     if parts.len() < 3 {
-        // Reuse the default decomposition on any malformed input so the
-        // download URL is still well-formed (the install will fail at
-        // size validation if the file doesn't exist upstream).
-        return (
-            "en".to_string(),
-            "en_US".to_string(),
-            "lessac".to_string(),
-            "medium".to_string(),
-        );
+        return None;
     }
     let locale = parts[0].to_string();
     let name = parts[1].to_string();
     let quality = parts[2..].join("-");
     let short_lang = locale.split('_').next().unwrap_or("en").to_string();
-    (short_lang, locale, name, quality)
+    Some((short_lang, locale, name, quality))
 }
 
 /// Convenience: read the current installer status snapshot, falling back
@@ -246,7 +237,7 @@ fn installed_artifacts_ok(install: &PiperInstall, voice_id: &str) -> bool {
             onnx_ok && json_ok
         })
         .unwrap_or(false);
-    let binary_ok = install.binary_candidates().iter().any(|p| p.is_file());
+    let binary_ok = find_workspace_piper_binary(install).is_some();
     tracing::debug!(
         "{LOG_PREFIX} install check binary_ok={} voice_ok={}",
         binary_ok,
@@ -262,9 +253,9 @@ pub async fn install_piper(
     install: &PiperInstall,
     voice_id: Option<String>,
     force_reinstall: bool,
-) -> Result<VoiceInstallStatus, String> {
+) -> Result<VoiceInstallStatus> {
     let _slot = try_acquire_install_slot(ENGINE_PIPER)
-        .ok_or_else(|| format!("{LOG_PREFIX} install already in progress"))?;
+        .ok_or_else(|| Error::InstallInProgress(ENGINE_PIPER.to_string()))?;
     let voice = voice_id
         .as_deref()
         .map(str::trim)
@@ -272,14 +263,24 @@ pub async fn install_piper(
         .unwrap_or(DEFAULT_PIPER_VOICE)
         .to_string();
     if install.voice_paths(&voice).is_none() {
-        return Err(format!(
-            "{LOG_PREFIX} invalid voice id: expected a single ASCII filename component"
+        return Err(Error::InvalidInput(
+            "Piper voice ID must be a locale-name-quality ASCII filename component".to_string(),
+        ));
+    }
+    if decode_voice_id(&voice).is_none() {
+        return Err(Error::InvalidInput(
+            "Piper voice ID must have locale-name-quality segments".to_string(),
         ));
     }
     tracing::debug!(
         "{LOG_PREFIX} install requested voice={voice} force_reinstall={force_reinstall}"
     );
 
+    if !force_reinstall {
+        // Repair archives installed by older versions before deciding whether
+        // the existing layout is runnable. Status checks remain read-only.
+        ensure_executable_bits(install.root());
+    }
     if !force_reinstall && installed_artifacts_ok(install, &voice) {
         tracing::debug!("{LOG_PREFIX} short-circuit: artifacts already present");
         // Repair permissions on the EXISTING install before reporting success.
@@ -289,7 +290,6 @@ pub async fn install_piper(
         // failures until they manually forced a reinstall. `ensure_executable_bits`
         // is a no-op when the bits are already set, so this costs a stat per
         // executable on the happy path.
-        ensure_executable_bits(install.root());
         if find_workspace_piper_binary(install).is_some() {
             let snapshot = VoiceInstallStatus {
                 engine: ENGINE_PIPER.to_string(),
@@ -317,7 +317,7 @@ pub async fn install_piper(
     });
 
     let result = run_install(install, &voice).await;
-    match &result {
+    match result {
         Ok(()) => {
             let snapshot = VoiceInstallStatus {
                 engine: ENGINE_PIPER.to_string(),
@@ -339,21 +339,21 @@ pub async fn install_piper(
                 downloaded_bytes: None,
                 total_bytes: None,
                 stage: None,
-                error_detail: Some(msg.clone()),
+                error_detail: Some(msg.to_string()),
             };
             write_status(snapshot.clone());
-            Err(msg.clone())
+            Err(msg)
         }
     }
 }
 
-async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> {
+async fn run_install(install: &PiperInstall, voice: &str) -> Result<()> {
     let root = install.root();
     let parent = root
         .parent()
-        .ok_or_else(|| format!("{LOG_PREFIX} install root has no parent"))?;
+        .ok_or_else(|| Error::Install(format!("{LOG_PREFIX} install root has no parent")))?;
     std::fs::create_dir_all(parent)
-        .map_err(|e| format!("{LOG_PREFIX} create install parent: {e}"))?;
+        .map_err(|e| Error::Install(format!("{LOG_PREFIX} create install parent: {e}")))?;
     static STAGE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let sequence = STAGE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let stage = parent.join(format!(
@@ -361,14 +361,15 @@ async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> 
         std::process::id()
     ));
     if stage.exists() {
-        std::fs::remove_dir_all(&stage)
-            .map_err(|e| format!("{LOG_PREFIX} remove stale staging directory: {e}"))?;
+        std::fs::remove_dir_all(&stage).map_err(|e| {
+            Error::Install(format!("{LOG_PREFIX} remove stale staging directory: {e}"))
+        })?;
     }
     if root.exists() {
-        copy_directory(root, &stage)?;
+        copy_directory(root, &stage).map_err(Error::Install)?;
     } else {
         std::fs::create_dir_all(&stage)
-            .map_err(|e| format!("{LOG_PREFIX} create staging directory: {e}"))?;
+            .map_err(|e| Error::Install(format!("{LOG_PREFIX} create staging directory: {e}")))?;
     }
     let staged_install = PiperInstall::new(&stage);
     if let Err(error) = run_install_into(&staged_install, voice).await {
@@ -379,20 +380,22 @@ async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> 
         || find_workspace_piper_binary(&staged_install).is_none()
     {
         let _ = std::fs::remove_dir_all(&stage);
-        return Err(format!(
+        return Err(Error::Install(format!(
             "{LOG_PREFIX} staged installation has no usable Piper executable or voice"
-        ));
+        )));
     }
-    commit_staged_directory(&stage, root)?;
+    commit_staged_directory(&stage, root).map_err(Error::Install)?;
     Ok(())
 }
 
-async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<(), String> {
+async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<()> {
     // 1) Voice files: `.onnx` (heavy) + `.onnx.json` (small sidecar).
-    let (onnx_url, json_url) = voice_download_urls(voice);
+    let (onnx_url, json_url) = voice_download_urls(voice).ok_or_else(|| {
+        Error::InvalidInput("Piper voice ID must have locale-name-quality segments".to_string())
+    })?;
     let (onnx_path, json_path) = install
         .voice_paths(voice)
-        .ok_or_else(|| format!("{LOG_PREFIX} could not resolve voice paths for '{voice}'"))?;
+        .ok_or_else(|| Error::InvalidInput(format!("could not resolve Piper voice '{voice}'")))?;
 
     tracing::debug!(
         "{LOG_PREFIX} downloading voice url={}",
@@ -420,8 +423,7 @@ async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<(), Str
             });
         },
     )
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
     tracing::debug!("{LOG_PREFIX} voice .onnx staged at {}", onnx_path.display());
 
     tracing::debug!(
@@ -450,12 +452,14 @@ async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<(), Str
             });
         },
     )
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
 
     // 2) Binary archive.
-    let asset = binary_download_asset()
-        .ok_or_else(|| format!("{LOG_PREFIX} no piper binary release for this OS/arch"))?;
+    let asset = binary_download_asset().ok_or_else(|| {
+        Error::Install(format!(
+            "{LOG_PREFIX} no piper binary release for this OS/arch"
+        ))
+    })?;
     let archive_name = asset
         .url
         .rsplit('/')
@@ -489,19 +493,18 @@ async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<(), Str
             });
         },
     )
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
     update_stage("extracting piper binary".to_string());
     let dest = install.root().to_path_buf();
     match asset.kind {
-        ArchiveKind::Zip => extract_zip(&archive_path, &dest)?,
-        ArchiveKind::TarGz => extract_tar_gz(&archive_path, &dest)?,
+        ArchiveKind::Zip => extract_zip(&archive_path, &dest).map_err(Error::Install)?,
+        ArchiveKind::TarGz => extract_tar_gz(&archive_path, &dest).map_err(Error::Install)?,
     }
     ensure_executable_bits(&dest);
     if find_workspace_piper_binary(install).is_none() {
-        return Err(format!(
+        return Err(Error::Install(format!(
             "{LOG_PREFIX} extracted archive contains no usable Piper executable"
-        ));
+        )));
     }
     if let Err(e) = std::fs::remove_file(&archive_path) {
         tracing::warn!(
@@ -513,7 +516,10 @@ async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<(), Str
     Ok(())
 }
 
-fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+fn copy_directory(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::result::Result<(), String> {
     std::fs::create_dir_all(destination)
         .map_err(|e| format!("{LOG_PREFIX} create {}: {e}", destination.display()))?;
     for entry in std::fs::read_dir(source)
@@ -542,7 +548,7 @@ fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Re
 fn commit_staged_directory(
     stage: &std::path::Path,
     destination: &std::path::Path,
-) -> Result<(), String> {
+) -> std::result::Result<(), String> {
     let backup = destination.with_extension("install-backup");
     if backup.exists() {
         std::fs::remove_dir_all(&backup)
@@ -646,7 +652,10 @@ fn update_stage(stage: String) {
     write_status(current);
 }
 
-fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
+fn extract_zip(
+    zip_path: &std::path::Path,
+    dest_dir: &std::path::Path,
+) -> std::result::Result<(), String> {
     tracing::debug!(
         "{LOG_PREFIX} extract_zip {} -> {}",
         zip_path.display(),
@@ -693,7 +702,10 @@ fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result
     Ok(())
 }
 
-fn extract_tar_gz(archive: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
+fn extract_tar_gz(
+    archive: &std::path::Path,
+    dest_dir: &std::path::Path,
+) -> std::result::Result<(), String> {
     tracing::debug!(
         "{LOG_PREFIX} extract_tar_gz {} -> {}",
         archive.display(),

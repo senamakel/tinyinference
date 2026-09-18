@@ -1,12 +1,37 @@
 //! Unit tests for the embeddings + retrieval module.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::json;
 
 use super::*;
 
 struct ShortEmbeddingModel;
+
+struct DiscoveringEmbeddingModel {
+    dimensions: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl EmbeddingModel for DiscoveringEmbeddingModel {
+    fn name(&self) -> &str {
+        "discovering"
+    }
+
+    fn model_id(&self) -> &str {
+        "discovering"
+    }
+
+    async fn embed(&self, texts: &[String]) -> crate::Result<Vec<Vec<f32>>> {
+        self.dimensions.store(2, Ordering::Release);
+        Ok(vec![vec![1.0, 0.0]; texts.len()])
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dimensions.load(Ordering::Acquire)
+    }
+}
 
 #[async_trait::async_trait]
 impl EmbeddingModel for ShortEmbeddingModel {
@@ -243,6 +268,24 @@ async fn retriever_index_and_retrieve_most_similar_first() {
     assert_eq!(hits[0].id, "cats");
     assert!((hits[0].score - 1.0).abs() < 1e-6);
     assert_eq!(hits[0].metadata, json!({"topic": "animals"}));
+}
+
+#[tokio::test]
+async fn retriever_discovers_dimensions_during_first_index() {
+    let model = Arc::new(DiscoveringEmbeddingModel {
+        dimensions: AtomicUsize::new(0),
+    });
+    let store = Arc::new(InMemoryVectorStore::new());
+    let retriever = Retriever::new(model.clone(), store.clone());
+
+    retriever
+        .index(vec![("doc".into(), "text".into(), json!({}))])
+        .await
+        .unwrap();
+
+    assert_eq!(model.dimensions(), 2);
+    assert_eq!(store.len(), 1);
+    assert_eq!(retriever.retrieve("text", 1).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
