@@ -99,6 +99,15 @@ fn normalize_lm_studio_base_url_preserves_existing_v1() {
 }
 
 #[test]
+fn normalize_lm_studio_base_url_preserves_query_after_path_normalization() {
+    let normalized =
+        normalize_lm_studio_base_url("https://lm.example.com/root?api-version=2026").unwrap();
+    let url = url::Url::parse(&normalized).unwrap();
+    assert_eq!(url.path(), "/root/v1");
+    assert_eq!(url.query(), Some("api-version=2026"));
+}
+
+#[test]
 fn normalize_lm_studio_base_url_strips_known_endpoint_suffix() {
     assert_eq!(
         normalize_lm_studio_base_url("http://127.0.0.1:1234/v1/chat/completions").as_deref(),

@@ -236,6 +236,27 @@ async fn prompt_disabled_returns_error() {
 }
 
 #[tokio::test]
+async fn direct_interactive_inference_honors_runtime_disablement() {
+    let mut config = Config::default();
+    config.local_ai.runtime_enabled = false;
+    let service = LocalAiService::new(&config);
+    let error = service
+        .inference_interactive(&config, "system", "prompt", None, true)
+        .await
+        .unwrap_err();
+    assert!(error.contains("local ai is disabled"));
+}
+
+#[test]
+fn runtime_debug_output_redacts_api_key() {
+    let mut config = Config::default();
+    config.local_ai.api_key = Some("local-secret".to_string());
+    let debug = format!("{config:?}");
+    assert!(!debug.contains("local-secret"));
+    assert!(debug.contains("[REDACTED]"));
+}
+
+#[tokio::test]
 async fn inline_complete_disabled_returns_empty_string() {
     let mut config = Config::default();
     config.local_ai.runtime_enabled = false;
@@ -249,7 +270,7 @@ async fn inline_complete_disabled_returns_empty_string() {
 
 #[tokio::test]
 async fn inline_complete_interactive_disabled_returns_empty_string() {
-    // Interactive variant must match the gated variant on the
+    // Interactive variant must match the standard variant on the
     // disabled short-circuit so the autocomplete UX is identical.
     let mut config = Config::default();
     config.local_ai.runtime_enabled = false;

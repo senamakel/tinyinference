@@ -30,7 +30,6 @@ impl LocalAiService {
         text: &str,
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
-        log::trace!("[local_ai] summarize_interactive bypasses scheduler_gate permit");
         if !config.local_ai.runtime_enabled {
             return Err("local ai is disabled".to_string());
         }
@@ -69,7 +68,6 @@ impl LocalAiService {
         max_tokens: Option<u32>,
         no_think: bool,
     ) -> Result<String, String> {
-        log::trace!("[local_ai] prompt_interactive bypasses scheduler_gate permit");
         if !config.local_ai.runtime_enabled {
             return Err("local ai is disabled".to_string());
         }
@@ -98,28 +96,12 @@ impl LocalAiService {
             style_instructions,
             style_examples,
             max_tokens,
-            /* gated = */ true,
         )
         .await
     }
 
-    /// Latency-sensitive sibling of [`Self::inline_complete`] that
-    /// **bypasses the scheduler gate's LLM permit**.
-    ///
-    /// Per-keystroke autocomplete must not block waiting for a
-    /// long-running memory-tree backfill or a triage turn to release
-    /// the global single slot. The user is at the keyboard; if the
-    /// background pipeline is busy we'd rather race the autocomplete
-    /// turn against it than show stale or empty completions for the
-    /// duration of the backfill.
-    ///
-    /// Along with [`Self::prompt_interactive`],
-    /// [`Self::summarize_interactive`], and
-    /// [`Self::chat_with_history_interactive`], this is one of the paths
-    /// inside [`LocalAiService`] that opts out of the gate. Every other
-    /// entry point (`inference`, `prompt`, `summarize`,
-    /// `inline_complete`, `vision_prompt`, `embed`, `chat_with_history`)
-    /// acquires before talking to Ollama.
+    /// Interactive alias for [`Self::inline_complete`]. Hosts decide whether
+    /// to acquire their own scheduler permit before entering this crate.
     pub async fn inline_complete_interactive(
         &self,
         config: &Config,
@@ -129,7 +111,6 @@ impl LocalAiService {
         style_examples: &[String],
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
-        log::trace!("[local_ai] inline_complete_interactive bypasses scheduler_gate permit");
         self.inline_complete_internal(
             config,
             context,
@@ -137,7 +118,6 @@ impl LocalAiService {
             style_instructions,
             style_examples,
             max_tokens,
-            /* gated = */ false,
         )
         .await
     }
@@ -151,7 +131,6 @@ impl LocalAiService {
         style_instructions: Option<&str>,
         style_examples: &[String],
         max_tokens: Option<u32>,
-        gated: bool,
     ) -> Result<String, String> {
         if !config.local_ai.runtime_enabled {
             return Ok(String::new());
@@ -201,7 +180,6 @@ impl LocalAiService {
                 max_tokens.or(Some(24)),
                 true,
                 0.05,
-                gated,
             )
             .await?;
         Ok(sanitize_inline_completion(&raw, context))
@@ -216,7 +194,7 @@ impl LocalAiService {
         messages: Vec<crate::ollama::OllamaChatMessage>,
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
-        self.chat_with_history_internal(config, messages, max_tokens, true)
+        self.chat_with_history_internal(config, messages, max_tokens)
             .await
     }
 
@@ -227,8 +205,7 @@ impl LocalAiService {
         messages: Vec<crate::ollama::OllamaChatMessage>,
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
-        log::trace!("[local_ai] chat_with_history_interactive bypasses scheduler_gate permit");
-        self.chat_with_history_internal(config, messages, max_tokens, false)
+        self.chat_with_history_internal(config, messages, max_tokens)
             .await
     }
 
@@ -237,7 +214,6 @@ impl LocalAiService {
         config: &Config,
         messages: Vec<crate::ollama::OllamaChatMessage>,
         max_tokens: Option<u32>,
-        gated: bool,
     ) -> Result<String, String> {
         if !config.local_ai.runtime_enabled {
             return Err("local ai is disabled".to_string());
@@ -250,8 +226,6 @@ impl LocalAiService {
         if messages.is_empty() {
             return Err("messages must not be empty".to_string());
         }
-
-        let _host_applies_scheduler_gate = gated;
 
         let started = std::time::Instant::now();
         let messages = messages
@@ -304,23 +278,8 @@ impl LocalAiService {
             .await
     }
 
-    /// Latency-sensitive sibling of the internal inference path that **bypasses
-    /// the scheduler gate's LLM permit**.
-    ///
-    /// Used by user-arrival paths where the user is staring at the
-    /// output (push-to-talk dictation cleanup and debug summary tests, in
-    /// particular). If we
-    /// queue these behind a long-running memory backfill, the user
-    /// experiences a frozen UI; better to race the call against
-    /// background work and accept the contention than to silently
-    /// degrade interactivity.
-    ///
-    /// Sibling to [`Self::inline_complete_interactive`] for autocomplete and
-    /// [`Self::summarize_interactive`] for explicit debug summary requests.
-    /// Every other entry point (`inference`, `prompt`, `summarize`,
-    /// `inline_complete`, `vision_prompt`, `embed`, `chat_with_history`)
-    /// remains gated.
-    /// Runs a latency-sensitive prompt without host-side background throttling.
+    /// Interactive alias for the internal inference operation. Hosts own scheduler policy
+    /// and decide whether to acquire a permit before entering this crate.
     pub async fn inference_interactive(
         &self,
         config: &Config,
@@ -329,10 +288,8 @@ impl LocalAiService {
         max_tokens: Option<u32>,
         no_think: bool,
     ) -> Result<String, String> {
-        log::trace!("[local_ai] inference_interactive bypasses scheduler_gate permit");
         self.inference_with_temperature_internal(
             config, system, prompt, max_tokens, no_think, 0.2, /* allow_empty = */ false,
-            /* gated = */ false,
         )
         .await
     }
@@ -354,7 +311,6 @@ impl LocalAiService {
             no_think,
             temperature,
             /* allow_empty = */ false,
-            /* gated = */ true,
         )
         .await
     }
@@ -368,7 +324,6 @@ impl LocalAiService {
         max_tokens: Option<u32>,
         no_think: bool,
         temperature: f32,
-        gated: bool,
     ) -> Result<String, String> {
         self.inference_with_temperature_internal(
             config,
@@ -378,7 +333,6 @@ impl LocalAiService {
             no_think,
             temperature,
             /* allow_empty = */ true,
-            gated,
         )
         .await
     }
@@ -393,19 +347,13 @@ impl LocalAiService {
         no_think: bool,
         temperature: f32,
         allow_empty: bool,
-        gated: bool,
     ) -> Result<String, String> {
+        if !config.local_ai.runtime_enabled {
+            return Err("local ai is disabled".to_string());
+        }
         if !matches!(self.status.lock().state.as_str(), "ready") {
             self.bootstrap(config).await;
         }
-
-        // Cooperative throttle + global single-slot acquisition for
-        // background LLM-bound work. Drop happens at end of scope so
-        // post-processing (status writes, logging) does NOT hold the
-        // permit any longer than necessary. Interactive autocomplete
-        // skips this via `gated = false` from
-        // `inline_complete_interactive`.
-        let _host_applies_scheduler_gate = gated;
 
         let started = std::time::Instant::now();
         let model_id = model_ids::effective_chat_model_id(config);

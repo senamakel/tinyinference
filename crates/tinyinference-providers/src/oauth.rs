@@ -38,7 +38,7 @@ pub fn openai_codex_config(redirect_uri: impl Into<String>) -> OAuthConfig {
 }
 
 /// OAuth client and endpoint configuration.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OAuthConfig {
     /// OAuth client identifier.
     pub client_id: String,
@@ -60,8 +60,28 @@ pub struct OAuthConfig {
     pub pending_filename: String,
 }
 
+impl std::fmt::Debug for OAuthConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OAuthConfig")
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("authorize_url", &self.authorize_url)
+            .field("token_url", &self.token_url)
+            .field("redirect_uri", &self.redirect_uri)
+            .field("scopes", &self.scopes)
+            .field("extra_authorize_params", &self.extra_authorize_params)
+            .field("state_equals_verifier", &self.state_equals_verifier)
+            .field("pending_filename", &self.pending_filename)
+            .finish()
+    }
+}
+
 /// Persistable OAuth token set owned by the host's credential store.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OAuthTokenSet {
     /// Access token.
     pub access_token: String,
@@ -73,6 +93,22 @@ pub struct OAuthTokenSet {
     pub expires_in: u64,
     /// Unix timestamp when the token was issued.
     pub issued_at: u64,
+}
+
+impl std::fmt::Debug for OAuthTokenSet {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OAuthTokenSet")
+            .field("access_token", &"[REDACTED]")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("id_token", &self.id_token.as_ref().map(|_| "[REDACTED]"))
+            .field("expires_in", &self.expires_in)
+            .field("issued_at", &self.issued_at)
+            .finish()
+    }
 }
 
 /// Result returned when an OAuth flow begins.
@@ -87,7 +123,7 @@ pub struct OAuthStart {
 }
 
 /// Tokens imported from the OpenAI Codex CLI credential file.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ImportedOpenAiCredentials {
     /// Normalized OAuth tokens.
     pub token: OAuthTokenSet,
@@ -95,6 +131,17 @@ pub struct ImportedOpenAiCredentials {
     pub account_id: Option<String>,
     /// Access-token expiry from its JWT payload.
     pub expires_at_unix: Option<i64>,
+}
+
+impl std::fmt::Debug for ImportedOpenAiCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ImportedOpenAiCredentials")
+            .field("token", &self.token)
+            .field("account_id", &self.account_id)
+            .field("expires_at_unix", &self.expires_at_unix)
+            .finish()
+    }
 }
 
 /// Parses an OpenAI Codex CLI `auth.json` payload.
@@ -220,6 +267,22 @@ mod tests {
     fn codex_cli_parser_rejects_missing_access_token() {
         let error = parse_openai_codex_auth_json(br#"{"tokens":{}}"#).unwrap_err();
         assert!(error.contains("access token"));
+    }
+
+    #[test]
+    fn debug_output_redacts_oauth_credentials() {
+        let token = OAuthTokenSet {
+            access_token: "access-secret".to_string(),
+            refresh_token: Some("refresh-secret".to_string()),
+            id_token: Some("id-secret".to_string()),
+            expires_in: 3600,
+            issued_at: 1,
+        };
+        let debug = format!("{token:?}");
+        assert!(!debug.contains("access-secret"));
+        assert!(!debug.contains("refresh-secret"));
+        assert!(!debug.contains("id-secret"));
+        assert!(debug.contains("[REDACTED]"));
     }
 }
 

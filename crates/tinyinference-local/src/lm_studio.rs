@@ -72,32 +72,30 @@ pub fn normalize_lm_studio_base_url(raw: &str) -> Option<String> {
         "[lm-studio] base URL scheme normalized"
     );
 
-    let without_known_endpoint = with_scheme
+    let mut url = url::Url::parse(&with_scheme).ok()?;
+    let without_known_endpoint = url
+        .path()
         .trim_end_matches("/chat/completions")
         .trim_end_matches("/models")
         .trim_end_matches('/')
         .to_string();
+    let normalized_path = if without_known_endpoint.ends_with("/v1") {
+        without_known_endpoint.to_string()
+    } else {
+        format!("{without_known_endpoint}/v1")
+    };
+    url.set_path(&normalized_path);
+    let normalized = url.to_string().trim_end_matches('/').to_string();
     tracing::trace!(
         without_known_endpoint = %redact_url(&without_known_endpoint),
         "[lm-studio] base URL endpoint suffix normalized"
     );
 
-    if without_known_endpoint.ends_with("/v1") {
-        tracing::trace!(
-            appended_v1 = false,
-            base_url = %redact_url(&without_known_endpoint),
-            "[lm-studio] base URL normalization complete"
-        );
-        Some(without_known_endpoint)
-    } else {
-        let normalized = format!("{without_known_endpoint}/v1");
-        tracing::trace!(
-            appended_v1 = true,
-            base_url = %redact_url(&normalized),
-            "[lm-studio] base URL normalization complete"
-        );
-        Some(normalized)
-    }
+    tracing::trace!(
+        base_url = %redact_url(&normalized),
+        "[lm-studio] base URL normalization complete"
+    );
+    Some(normalized)
 }
 
 pub fn apply_lm_studio_auth(

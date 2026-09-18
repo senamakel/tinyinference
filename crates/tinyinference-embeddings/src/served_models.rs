@@ -32,9 +32,12 @@ pub async fn fetch_served_model_ids(endpoint: &str, api_key: &str) -> Result<Vec
         data: Vec<ModelEntry>,
     }
 
-    let url = format!("{}/models", endpoint.trim_end_matches('/'));
+    let mut url = url::Url::parse(endpoint.trim())
+        .map_err(|error| format!("invalid models endpoint: {error}"))?;
+    let path = format!("{}/models", url.path().trim_end_matches('/'));
+    url.set_path(&path);
     let client = reqwest::Client::new();
-    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
+    let mut req = client.get(url).timeout(std::time::Duration::from_secs(5));
     if !api_key.trim().is_empty() {
         req = req.bearer_auth(api_key.trim());
     }

@@ -6,6 +6,19 @@ fn catalog_is_non_empty() {
 }
 
 #[test]
+fn catalog_entries_have_a_stable_json_shape() {
+    let provider = find_provider(PROVIDER_OPENAI).unwrap();
+    let value = serde_json::to_value(provider).unwrap();
+    assert_eq!(value["slug"], "openai");
+    assert_eq!(value["models"][0]["id"], "text-embedding-3-small");
+    assert_eq!(value["models"][0]["default_dimensions"], 1536);
+    assert_eq!(
+        value["models"][0]["allowed_dimensions"],
+        serde_json::json!([512, 1536])
+    );
+}
+
+#[test]
 fn managed_is_first() {
     assert_eq!(all_providers()[0].slug, PROVIDER_MANAGED);
 }

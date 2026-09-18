@@ -90,7 +90,7 @@ pub(crate) mod presets_adapter {
 }
 
 /// Host-selected local runtime settings consumed by the runtime service.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct LocalRuntimeSettings {
     pub runtime_enabled: bool,
     pub provider: String,
@@ -116,6 +116,27 @@ pub struct LocalRuntimeSettings {
     pub opt_in_confirmed: bool,
     pub ollama_binary_path: Option<String>,
     pub num_ctx: Option<u32>,
+}
+
+impl std::fmt::Debug for LocalRuntimeSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LocalRuntimeSettings")
+            .field("runtime_enabled", &self.runtime_enabled)
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("model_id", &self.model_id)
+            .field("chat_model_id", &self.chat_model_id)
+            .field("vision_model_id", &self.vision_model_id)
+            .field("embedding_model_id", &self.embedding_model_id)
+            .field("stt_model_id", &self.stt_model_id)
+            .field("tts_voice_id", &self.tts_voice_id)
+            .field("quantization", &self.quantization)
+            .field("selected_tier", &self.selected_tier)
+            .field("num_ctx", &self.num_ctx)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Complete host snapshot needed by local inference execution.

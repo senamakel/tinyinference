@@ -40,6 +40,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 /// failure mode behind the "progress stuck at 18%" symptom) holds the
 /// install task forever, defeating the polled-status UX.
 const CHUNK_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+const MAX_ARTIFACT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 use tokio::io::AsyncWriteExt;
 
 /// Stable engine id for status tracking. The installer registers its progress
@@ -258,7 +259,7 @@ pub fn try_acquire_install_slot(engine: &'static str) -> Option<InstallSlot> {
 ///
 /// Progress callbacks fire every chunk with `(downloaded_bytes,
 /// total_bytes)`. Total may be `None` for chunked responses.
-pub async fn download_to_file(
+pub(crate) async fn download_to_file(
     url: &str,
     dest: &Path,
     expected_sha256: Option<&str>,
@@ -266,7 +267,10 @@ pub async fn download_to_file(
     log_prefix: &str,
     on_progress: impl FnMut(u64, Option<u64>),
 ) -> crate::Result<()> {
-    if let Some(parent) = dest.parent() {
+    if let Some(parent) = dest
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
             crate::Error::DownloadIo(format!("{log_prefix} mkdir {}: {e}", parent.display()))
         })?;
@@ -282,7 +286,8 @@ pub async fn download_to_file(
         let _ = tokio::fs::remove_file(&part_path).await;
     }
 
-    let safe_url = tinyinference_core::sanitize::redact_url(url);
+    let parsed_url = validate_artifact_url(url)?;
+    let safe_url = tinyinference_core::sanitize::redact_url(parsed_url.as_str());
     tracing::debug!("{log_prefix} GET {safe_url} -> {}", part_path.display());
     let client = reqwest::Client::builder()
         // 15s connect handshake; 30min overall request budget (covers 1.6 GB
@@ -291,11 +296,18 @@ pub async fn download_to_file(
         // fail fast instead of hanging the install task forever.
         .connect_timeout(Duration::from_secs(15))
         .timeout(REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if validate_artifact_url(attempt.url().as_str()).is_ok() {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
         .build()
         .map_err(|e| crate::Error::DownloadHttp(format!("{log_prefix} build http client: {e}")))?;
     let started = Instant::now();
     let resp =
-        client.get(url).send().await.map_err(|e| {
+        client.get(parsed_url).send().await.map_err(|e| {
             crate::Error::DownloadHttp(format!("{log_prefix} request {safe_url}: {e}"))
         })?;
     if !resp.status().is_success() {
@@ -305,6 +317,11 @@ pub async fn download_to_file(
         )));
     }
     let total = resp.content_length();
+    if total.is_some_and(|length| length > MAX_ARTIFACT_BYTES) {
+        return Err(crate::Error::DownloadIntegrity(format!(
+            "{log_prefix} artifact exceeds maximum size of {MAX_ARTIFACT_BYTES} bytes"
+        )));
+    }
     tracing::debug!(
         "{log_prefix} response status={} content_length={:?}",
         resp.status(),
@@ -331,6 +348,27 @@ pub async fn download_to_file(
         started.elapsed().as_millis()
     );
     Ok(())
+}
+
+fn validate_artifact_url(input: &str) -> crate::Result<url::Url> {
+    let url = url::Url::parse(input)
+        .map_err(|error| crate::Error::DownloadHttp(format!("invalid artifact URL: {error}")))?;
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let permitted = host == "github.com"
+        || host.ends_with(".githubusercontent.com")
+        || host == "huggingface.co"
+        || host.ends_with(".huggingface.co")
+        || host.ends_with(".xethub.hf.co");
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !permitted
+    {
+        return Err(crate::Error::DownloadHttp(
+            "artifact URL must use HTTPS and an approved release host".to_string(),
+        ));
+    }
+    Ok(url)
 }
 
 #[derive(Debug)]
@@ -393,6 +431,15 @@ where
                 )));
             }
         };
+        if downloaded.saturating_add(bytes.len() as u64) > MAX_ARTIFACT_BYTES
+            || total.is_some_and(|length| downloaded.saturating_add(bytes.len() as u64) > length)
+        {
+            drop(file);
+            let _ = tokio::fs::remove_file(&part_path).await;
+            return Err(crate::Error::DownloadIntegrity(format!(
+                "{log_prefix} downloaded payload exceeded its allowed size"
+            )));
+        }
         if let Some(h) = hasher.as_mut() {
             h.update(&bytes);
         }
@@ -407,10 +454,22 @@ where
         downloaded = downloaded.saturating_add(bytes.len() as u64);
         on_progress(downloaded, total);
     }
-    file.flush().await.map_err(|e| {
-        crate::Error::DownloadIo(format!("{log_prefix} flush {}: {e}", part_path.display()))
-    })?;
+    if let Err(error) = file.flush().await {
+        drop(file);
+        let _ = tokio::fs::remove_file(&part_path).await;
+        return Err(crate::Error::DownloadIo(format!(
+            "{log_prefix} flush {}: {error}",
+            part_path.display()
+        )));
+    }
     drop(file);
+
+    if total.is_some_and(|length| downloaded != length) {
+        let _ = tokio::fs::remove_file(&part_path).await;
+        return Err(crate::Error::DownloadIntegrity(format!(
+            "{log_prefix} content length mismatch: expected {total:?}, got {downloaded} bytes"
+        )));
+    }
 
     if downloaded < min_bytes {
         let _ = tokio::fs::remove_file(&part_path).await;
@@ -443,6 +502,7 @@ async fn commit_download(part_path: &Path, dest: &Path, log_prefix: &str) -> cra
     match tokio::fs::rename(part_path, dest).await {
         Ok(()) => return Ok(()),
         Err(error) if !dest.exists() => {
+            let _ = tokio::fs::remove_file(part_path).await;
             return Err(crate::Error::DownloadIo(format!(
                 "{log_prefix} rename {} -> {}: {error}",
                 part_path.display(),

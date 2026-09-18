@@ -1,7 +1,9 @@
 //! The setup-time embed probe: sending one request to a custom endpoint and
 //! classifying what came back into an accept-or-reject verdict.
 
-use crate::model_supports_dimensions;
+use crate::{Error, Result, model_supports_dimensions};
+
+const MAX_PROBE_RESPONSE_BYTES: usize = 64 * 1024;
 
 /// A portable rejection returned by embedding endpoint validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,50 +27,75 @@ pub async fn probe_custom_embeddings(
     api_key: &str,
     model: &str,
     configured_dimensions: usize,
-) -> Result<Vec<Vec<f32>>, String> {
+) -> Result<Vec<Vec<f32>>> {
     let url = embeddings_probe_url(endpoint)?;
     let safe_url = tinyinference_core::sanitize::redact_url(url.as_str());
     let mut body = serde_json::json!({ "model": model, "input": ["connection test"] });
     if model_supports_dimensions(model) && configured_dimensions > 0 {
         body["dimensions"] = serde_json::json!(configured_dimensions);
     }
-    let mut request = reqwest::Client::new().post(url).json(&body);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|error| Error::Embedding(format!("build custom embeddings client: {error}")))?;
+    let mut request = client.post(url).json(&body);
     if !api_key.trim().is_empty() {
         request = request.bearer_auth(api_key.trim());
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("custom embeddings request to {safe_url} failed: {e}"))?;
+    let response = request.send().await.map_err(|e| {
+        Error::Embedding(format!(
+            "custom embeddings request to {safe_url} failed: {e}"
+        ))
+    })?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("custom embeddings response read failed: {e}"))?;
+    let body = bounded_response_body(response).await?;
     if !status.is_success() {
-        return Err(format!("custom embeddings returned HTTP {status}: {body}"));
+        let without_explicit_key = if api_key.trim().is_empty() {
+            body
+        } else {
+            body.replace(api_key.trim(), "[REDACTED]")
+        };
+        let detail = tinyinference_core::sanitize::sanitize_api_error(&without_explicit_key);
+        return Err(Error::Embedding(format!(
+            "custom embeddings returned HTTP {status}: {detail}"
+        )));
     }
     let data = serde_json::from_str::<serde_json::Value>(&body)
-        .map_err(|e| format!("custom embeddings response was not JSON: {e}"))?
+        .map_err(Error::Serialization)?
         .get("data")
         .and_then(serde_json::Value::as_array)
         .cloned()
-        .ok_or_else(|| "custom embeddings response missing data array".to_string())?;
+        .ok_or_else(|| {
+            Error::Validation("custom embeddings response missing data array".to_string())
+        })?;
     let vectors = data
         .into_iter()
         .map(|item| {
             item.get("embedding")
                 .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| "custom embeddings response missing embedding array".to_string())?
+                .ok_or_else(|| {
+                    Error::Validation(
+                        "custom embeddings response missing embedding array".to_string(),
+                    )
+                })?
                 .iter()
                 .map(|value| {
-                    value.as_f64().map(|value| value as f32).ok_or_else(|| {
-                        "custom embeddings response contains a non-numeric vector".to_string()
+                    let value = value.as_f64().ok_or_else(|| {
+                        Error::Validation(
+                            "custom embeddings response contains a non-numeric vector".to_string(),
+                        )
+                    })?;
+                    let component = value as f32;
+                    component.is_finite().then_some(component).ok_or_else(|| {
+                        Error::Validation(
+                            "custom embeddings response contains a non-finite vector component"
+                                .to_string(),
+                        )
                     })
                 })
                 .collect()
         })
-        .collect::<Result<Vec<Vec<f32>>, String>>()?;
+        .collect::<Result<Vec<Vec<f32>>>>()?;
     validate_probe_vectors(model, configured_dimensions, &vectors)?;
     Ok(vectors)
 }
@@ -77,11 +104,16 @@ fn validate_probe_vectors(
     model: &str,
     configured_dimensions: usize,
     vectors: &[Vec<f32>],
-) -> Result<(), String> {
+) -> Result<()> {
     if vectors.len() != 1 {
-        return Err(format!(
+        return Err(Error::Validation(format!(
             "custom embeddings vector count mismatch: expected 1, got {}",
             vectors.len()
+        )));
+    }
+    if vectors[0].is_empty() {
+        return Err(Error::Validation(
+            "custom embeddings returned an empty vector".to_string(),
         ));
     }
     if model_supports_dimensions(model)
@@ -89,16 +121,32 @@ fn validate_probe_vectors(
         && vectors[0].len() != configured_dimensions
     {
         let actual = vectors.first().map(Vec::len).unwrap_or(0);
-        return Err(format!(
+        return Err(Error::Validation(format!(
             "custom embeddings dimension mismatch: expected {configured_dimensions}, got {actual}"
-        ));
+        )));
     }
     Ok(())
 }
 
-fn embeddings_probe_url(endpoint: &str) -> Result<url::Url, String> {
+fn embeddings_probe_url(endpoint: &str) -> Result<url::Url> {
     let mut url = url::Url::parse(endpoint.trim())
-        .map_err(|e| format!("invalid custom embeddings endpoint: {e}"))?;
+        .map_err(|e| Error::Validation(format!("invalid custom embeddings endpoint: {e}")))?;
+    if url.host().is_none() || !url.username().is_empty() || url.password().is_some() {
+        return Err(Error::Validation(
+            "custom embeddings endpoint must have a host and no embedded credentials".to_string(),
+        ));
+    }
+    let loopback_http = url.scheme() == "http"
+        && url.host().is_some_and(|host| match host {
+            url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+            url::Host::Ipv4(address) => address.is_loopback(),
+            url::Host::Ipv6(address) => address.is_loopback(),
+        });
+    if url.scheme() != "https" && !loopback_http {
+        return Err(Error::Validation(
+            "custom embeddings endpoint must use HTTPS or loopback HTTP".to_string(),
+        ));
+    }
     let path = url.path().trim_end_matches('/');
     let path = if path.ends_with("/embeddings") {
         path.to_string()
@@ -109,6 +157,23 @@ fn embeddings_probe_url(endpoint: &str) -> Result<url::Url, String> {
     };
     url.set_path(&path);
     Ok(url)
+}
+
+async fn bounded_response_body(mut response: reqwest::Response) -> Result<String> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        Error::Embedding(format!("custom embeddings response read failed: {error}"))
+    })? {
+        if body.len().saturating_add(chunk.len()) > MAX_PROBE_RESPONSE_BYTES {
+            return Err(Error::Validation(format!(
+                "custom embeddings response exceeds {MAX_PROBE_RESPONSE_BYTES} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|error| {
+        Error::Validation(format!("custom embeddings response was not UTF-8: {error}"))
+    })
 }
 
 /// Dimension to persist after a successful Custom verification probe.
@@ -144,7 +209,7 @@ mod tests {
     fn probe_requires_one_vector_for_its_one_input() {
         let error = validate_probe_vectors("bge-m3", 1024, &[vec![0.0], vec![1.0]])
             .expect_err("two vectors must be rejected");
-        assert!(error.contains("expected 1, got 2"));
+        assert!(error.to_string().contains("expected 1, got 2"));
     }
 }
 
@@ -187,11 +252,7 @@ pub fn classify_embed_probe(outcome: EmbedProbe) -> Option<EmbeddingProbeRejecti
 
     match outcome {
         // Pass only when the endpoint returns a usable vector.
-        EmbedProbe::Returned(vectors)
-            if vectors.first().map(|v| !v.is_empty()).unwrap_or(false) =>
-        {
-            None
-        }
+        EmbedProbe::Returned(vectors) if vectors.len() == 1 && !vectors[0].is_empty() => None,
         // Reachable but produced no usable vector — not a valid embedder.
         EmbedProbe::Returned(_) => reject(
             "EMBEDDINGS_VERIFICATION_FAILED",
