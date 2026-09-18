@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use super::EmbeddingModel;
 use super::retry_after::{MAX_RETRIES, backoff_ms_for_attempt};
+use super::{EmbeddingModel, EmbeddingUsage};
 use crate::{Error, Result};
 
 /// Cohere API base URL.
@@ -78,6 +78,11 @@ impl CohereEmbeddingModel {
 #[derive(Deserialize)]
 struct CohereResponse {
     embeddings: CohereEmbeddings,
+    /// Absent on older responses and on any error shape, so the whole chain
+    /// down to the count is optional; a missing link reports no usage rather
+    /// than failing an embed whose vectors parsed.
+    #[serde(default)]
+    meta: Option<CohereMeta>,
 }
 
 #[derive(Deserialize)]
@@ -85,23 +90,44 @@ struct CohereEmbeddings {
     float: Vec<Vec<f32>>,
 }
 
-#[async_trait]
-impl EmbeddingModel for CohereEmbeddingModel {
-    fn name(&self) -> &str {
-        "cohere"
-    }
+#[derive(Deserialize)]
+struct CohereMeta {
+    #[serde(default)]
+    billed_units: Option<CohereBilledUnits>,
+}
 
-    fn model_id(&self) -> &str {
-        &self.model
-    }
+#[derive(Deserialize)]
+struct CohereBilledUnits {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+}
 
-    fn dimensions(&self) -> usize {
-        self.dimensions
+impl CohereResponse {
+    /// The batch's billed input tokens, when Cohere reported them.
+    ///
+    /// Cohere states embedding spend under `meta.billed_units.input_tokens`
+    /// rather than the `usage` object its OpenAI-compatible peers use. Zero is
+    /// reported as `None` for the same reason as elsewhere: a count of zero
+    /// cannot be told apart from a field that was never populated.
+    fn usage(&self) -> Option<EmbeddingUsage> {
+        let tokens = self.meta.as_ref()?.billed_units.as_ref()?.input_tokens?;
+        (tokens > 0).then(|| EmbeddingUsage::new(tokens))
     }
+}
 
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+impl CohereEmbeddingModel {
+    /// One `/v2/embed` request: the vectors, and Cohere's billed input tokens
+    /// when the response carried them.
+    ///
+    /// The single request path behind both [`EmbeddingModel::embed`] and
+    /// [`EmbeddingModel::embed_with_usage`], so asking for usage cannot cost a
+    /// second round trip and the two entry points cannot drift.
+    async fn embed_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
         if texts.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
         if self.dimensions == 0 {
             return Err(Error::Validation(
@@ -177,6 +203,8 @@ impl EmbeddingModel for CohereEmbeddingModel {
         let payload: CohereResponse = serde_json::from_str(&text).map_err(|error| {
             Error::Embedding(format!("Cohere embed response parse failed: {error}"))
         })?;
+        // Read before the vectors move out of `payload`.
+        let usage = payload.usage();
         let vectors = payload.embeddings.float;
         if vectors.len() != texts.len() {
             return Err(Error::Embedding(format!(
@@ -194,7 +222,34 @@ impl EmbeddingModel for CohereEmbeddingModel {
                 )));
             }
         }
+        Ok((vectors, usage))
+    }
+}
+
+#[async_trait]
+impl EmbeddingModel for CohereEmbeddingModel {
+    fn name(&self) -> &str {
+        "cohere"
+    }
+
+    fn model_id(&self) -> &str {
+        &self.model
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let (vectors, _usage) = self.embed_batch(texts).await?;
         Ok(vectors)
+    }
+
+    async fn embed_with_usage(
+        &self,
+        texts: &[String],
+    ) -> Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
+        self.embed_batch(texts).await
     }
 
     async fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
@@ -231,6 +286,38 @@ mod tests {
     async fn empty_batch_short_circuits_before_key_validation() {
         let model = CohereEmbeddingModel::new("");
         assert!(model.embed(&[]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_batch_reports_no_usage() {
+        let model = CohereEmbeddingModel::new("");
+        let (vectors, usage) = model.embed_with_usage(&[]).await.unwrap();
+        assert!(vectors.is_empty());
+        assert!(usage.is_none());
+    }
+
+    #[test]
+    fn billed_units_carry_the_batch_usage() {
+        let payload: CohereResponse = serde_json::from_str(
+            r#"{"embeddings":{"float":[[1.0]]},"meta":{"billed_units":{"input_tokens":77}}}"#,
+        )
+        .unwrap();
+        assert_eq!(payload.usage(), Some(EmbeddingUsage::new(77)));
+    }
+
+    #[test]
+    fn a_response_without_billed_units_reports_no_usage() {
+        // Every link is optional, and a missing one must not fail an embed
+        // whose vectors parsed.
+        for body in [
+            r#"{"embeddings":{"float":[[1.0]]}}"#,
+            r#"{"embeddings":{"float":[[1.0]]},"meta":{}}"#,
+            r#"{"embeddings":{"float":[[1.0]]},"meta":{"billed_units":{}}}"#,
+            r#"{"embeddings":{"float":[[1.0]]},"meta":{"billed_units":{"input_tokens":0}}}"#,
+        ] {
+            let payload: CohereResponse = serde_json::from_str(body).unwrap();
+            assert!(payload.usage().is_none(), "expected no usage for {body}");
+        }
     }
 
     #[tokio::test]

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::{EmbeddingModel, OpenAiEmbeddingModel};
+use super::{EmbeddingModel, EmbeddingUsage, OpenAiEmbeddingModel};
 use crate::{Error, Result};
 
 /// Default model id for the host-authenticated cloud endpoint.
@@ -53,6 +53,49 @@ impl std::fmt::Debug for CloudEmbeddingModel {
     }
 }
 
+impl CloudEmbeddingModel {
+    /// Validates `texts`, resolves the bearer, and builds the request model.
+    ///
+    /// `None` for an empty batch — the one case that answers without a
+    /// credential, so an empty call must not fail on a missing session.
+    ///
+    /// Shared by both embed entry points so the validation order stays one
+    /// thing: refuse blank input before the bearer is resolved, and refuse a
+    /// blank bearer before the texts leave the process.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Validation`] when an input is empty or whitespace, when the
+    /// bearer resolver fails, or when it resolves to a blank token.
+    fn delegate(&self, texts: &[String]) -> Result<Option<OpenAiEmbeddingModel>> {
+        if texts.is_empty() {
+            return Ok(None);
+        }
+        if let Some(index) = texts.iter().position(|text| text.trim().is_empty()) {
+            return Err(Error::Validation(format!(
+                "cloud embed: refusing empty/whitespace input at index {index} of {} (model={})",
+                texts.len(),
+                self.model
+            )));
+        }
+        let bearer = (self.bearer)()?;
+        if bearer.trim().is_empty() {
+            return Err(Error::Validation(
+                "No backend session for cloud embeddings".into(),
+            ));
+        }
+        Ok(Some(
+            OpenAiEmbeddingModel::new(bearer)
+                .with_client(self.client.clone())
+                .with_base_url(&self.base_url)
+                .with_model(&self.model)
+                .with_dimensions(self.dimensions)
+                .with_send_dimensions(false)
+                .with_required_api_key(true),
+        ))
+    }
+}
+
 #[async_trait]
 impl EmbeddingModel for CloudEmbeddingModel {
     fn name(&self) -> &str {
@@ -68,31 +111,22 @@ impl EmbeddingModel for CloudEmbeddingModel {
     }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
+        let Some(delegate) = self.delegate(texts)? else {
             return Ok(Vec::new());
-        }
-        if let Some(index) = texts.iter().position(|text| text.trim().is_empty()) {
-            return Err(Error::Validation(format!(
-                "cloud embed: refusing empty/whitespace input at index {index} of {} (model={})",
-                texts.len(),
-                self.model
-            )));
-        }
-        let bearer = (self.bearer)()?;
-        if bearer.trim().is_empty() {
-            return Err(Error::Validation(
-                "No backend session for cloud embeddings".into(),
-            ));
-        }
-        OpenAiEmbeddingModel::new(bearer)
-            .with_client(self.client.clone())
-            .with_base_url(&self.base_url)
-            .with_model(&self.model)
-            .with_dimensions(self.dimensions)
-            .with_send_dimensions(false)
-            .with_required_api_key(true)
-            .embed(texts)
-            .await
+        };
+        delegate.embed(texts).await
+    }
+
+    /// Forwarded, not defaulted: the endpoint is OpenAI-compatible, so the
+    /// delegate already reads the usage this host is billed on.
+    async fn embed_with_usage(
+        &self,
+        texts: &[String],
+    ) -> Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
+        let Some(delegate) = self.delegate(texts)? else {
+            return Ok((Vec::new(), None));
+        };
+        delegate.embed_with_usage(texts).await
     }
 }
 
