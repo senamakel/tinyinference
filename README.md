@@ -17,7 +17,9 @@ The crate provides:
 - request caching, stream accumulation, normalized provider failures,
   provider-neutral retry classification and `Retry-After` parsing;
 - conservative context-window and vision-capability hints for raw model ids
-  when a provider cannot supply an authoritative model profile.
+  when a provider cannot supply an authoritative model profile;
+- normalized provider model-catalog parsing and local runtime model, vision,
+  embedding, speech model, voice, and quantization resolution.
 
 ## Use
 
@@ -47,7 +49,9 @@ Cargo.toml
 crates/tinyinference/
 └── src/
     ├── cache/       request fingerprints and response-cache contracts
+    ├── catalog/     provider model-catalog types and response parsing
     ├── embeddings/ embedding clients, vector store, and retriever
+    ├── local/      local runtime wire types, profiles, and model resolution
     ├── message/    provider-neutral message and content blocks
     ├── model/      ChatModel, request/response, profiles, and streaming
     ├── providers/  mock and OpenAI-compatible transports

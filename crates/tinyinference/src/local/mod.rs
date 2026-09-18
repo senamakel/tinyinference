@@ -2,6 +2,7 @@
 
 pub mod lm_studio;
 pub mod model_requirements;
+pub mod models;
 pub mod ollama;
 pub mod process;
 pub mod profile;

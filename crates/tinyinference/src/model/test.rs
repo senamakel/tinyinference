@@ -9,6 +9,32 @@ use crate::usage::Usage;
 use serde_json::json;
 
 #[test]
+fn local_context_fallback_uses_profiles_and_conservative_floor() {
+    use crate::local::profile::LocalProviderKind;
+
+    assert_eq!(
+        context_window_with_local_fallback("unknown", None, Some(LocalProviderKind::Ollama)),
+        Some(8_192)
+    );
+    assert_eq!(
+        context_window_with_local_fallback("unknown", None, Some(LocalProviderKind::Mlx)),
+        Some(4_096)
+    );
+    assert_eq!(
+        context_window_with_local_fallback("unknown", None, None),
+        None
+    );
+    assert_eq!(
+        context_window_with_local_fallback("unknown", None, Some(LocalProviderKind::LocalOpenai)),
+        Some(4_096)
+    );
+    assert_eq!(
+        context_window_with_local_fallback("known", Some(128_000), Some(LocalProviderKind::Ollama)),
+        Some(128_000)
+    );
+}
+
+#[test]
 fn request_builder_sets_fields() {
     let req = ModelRequest::new(vec![Message::user("hi")])
         .with_model("gpt")

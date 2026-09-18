@@ -8,6 +8,7 @@
 
 pub mod auth_errors;
 pub mod cache;
+pub mod catalog;
 pub mod classification;
 pub mod completion;
 pub mod device;
@@ -33,6 +34,7 @@ pub use embeddings::{
     EmbeddingModel, InMemoryVectorStore, MockEmbeddingModel, Retriever, ScoredDoc, VectorStore,
     cosine_similarity,
 };
+pub use local::models::LocalModelConfig;
 pub use message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 pub use model::{
     ChatModel, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
