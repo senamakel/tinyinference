@@ -74,6 +74,8 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
 /// [`ModelRequest::timeout_ms`]. Streaming calls get no overall cap by default.
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 600;
 
+pub mod codex;
+mod config;
 mod convert;
 mod local;
 mod prompt_tools;
@@ -82,6 +84,10 @@ mod responses;
 mod sse;
 mod transport;
 
+pub use config::{
+    OpenAiConfig, build_local_runtime_chat_model, build_openai_chat_model, build_openai_model,
+    endpoint_is_openrouter,
+};
 pub use local::{
     CONTEXT_OVERFLOW_CODE, LocalProbe, LocalRuntimeKind, is_chat_template_rejection_message,
 };
@@ -100,6 +106,8 @@ use transport::{
     request_timeout,
 };
 
+#[cfg(test)]
+mod config_test;
 #[cfg(test)]
 mod local_test;
 #[cfg(test)]

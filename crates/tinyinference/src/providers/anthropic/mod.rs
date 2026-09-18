@@ -38,10 +38,15 @@
 //! opt out via `protect_prompt_prefix = false`. A request without a policy
 //! follows its segments: declaring a cacheable prefix *is* the opt-in.
 
+mod config;
 mod request;
 mod response;
 mod stream;
 
+pub use config::{AnthropicConfig, build_anthropic_model, endpoint_is_anthropic_messages};
+
+#[cfg(test)]
+mod config_test;
 #[cfg(test)]
 mod test;
 
