@@ -437,6 +437,7 @@ pub use voyage::{
 mod test;
 pub use cloud::{
     BearerResolver, CloudEmbeddingModel, DEFAULT_CLOUD_DIMENSIONS, DEFAULT_CLOUD_MODEL,
+    EmbeddingEgressGuard,
 };
 pub use cohere::{
     COHERE_API_BASE, COHERE_DEFAULT_DIMENSIONS, COHERE_DEFAULT_MODEL, CohereEmbeddingModel,

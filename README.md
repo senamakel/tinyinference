@@ -21,7 +21,9 @@ The workspace provides:
 - normalized provider model-catalog parsing and local runtime model, vision,
   embedding, speech model, voice, and quantization resolution;
 - embedding-provider catalogs, local model-tier presets, Ollama installation,
-  and Piper binary/voice installation with atomic downloads and status tracking.
+  Piper binary/voice installation, local runtime lifecycle and inference;
+- reusable provider OAuth/PKCE, OpenAI Codex authentication, credential-file
+  parsing, and deterministic provider-error classification.
 
 ## Use
 
@@ -44,7 +46,8 @@ TinyAgents vendors this repository at `vendor/tinyinference` and re-exports the
 public modules through its historical `tinyagents::harness::*` paths. New code
 can depend on `tinyinference-llm` for language models,
 `tinyinference-embeddings` for vector generation and retrieval,
-`tinyinference-local` for local runtimes and installers, and
+`tinyinference-local` for local runtimes and installers,
+`tinyinference-providers` for provider authentication and routing primitives, and
 `tinyinference-core` only for shared infrastructure.
 
 ## Layout
@@ -70,6 +73,8 @@ crates/tinyinference-embeddings/
 └── src/            embedding clients, vector store, and retriever
 crates/tinyinference-local/
 └── src/            device profiling, local runtimes, model selection, and installers
+crates/tinyinference-providers/
+└── src/            OAuth/PKCE flows and provider error classification
 ```
 
 ## Development

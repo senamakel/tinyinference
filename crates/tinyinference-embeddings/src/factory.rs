@@ -1,9 +1,95 @@
 //! Provider construction and custom-endpoint validation.
 
+use std::sync::Arc;
+
 use crate::{
-    CohereEmbeddingModel, EmbeddingModel, Error, NoopEmbeddingModel, OllamaEmbeddingModel,
-    OpenAiEmbeddingModel, Result, VOYAGE_API_BASE, VoyageEmbeddingModel, model_supports_dimensions,
+    CohereEmbeddingModel, DEFAULT_CLOUD_DIMENSIONS, DEFAULT_CLOUD_MODEL, EmbeddingModel, Error,
+    NoopEmbeddingModel, OllamaEmbeddingModel, OpenAiEmbeddingModel, Result, VOYAGE_API_BASE,
+    VoyageEmbeddingModel, model_supports_dimensions,
 };
+
+/// Resolves a credential for a normalized provider slug.
+pub type CredentialResolver = Arc<dyn Fn(&str) -> String + Send + Sync>;
+
+/// Constructs the host-authenticated managed embedding model.
+pub type ManagedModelFactory =
+    Arc<dyn Fn(&str, usize) -> Result<Box<dyn EmbeddingModel>> + Send + Sync>;
+
+/// Host-independent inputs for selecting an embedding provider.
+#[derive(Clone, Debug)]
+pub struct EmbeddingFactorySettings {
+    /// Persisted provider name, including an optional `custom:<url>` endpoint.
+    pub provider: String,
+    /// Provider model identifier.
+    pub model: String,
+    /// Requested vector dimensions.
+    pub dimensions: usize,
+    /// Config-aware Ollama base URL.
+    pub ollama_base_url: String,
+}
+
+/// Builds a provider from persisted settings while keeping credential storage
+/// and managed authentication in host-supplied callbacks.
+pub fn create_configured_embedding_model(
+    settings: &EmbeddingFactorySettings,
+    credentials: &CredentialResolver,
+    managed: &ManagedModelFactory,
+) -> Result<Box<dyn EmbeddingModel>> {
+    let stored_provider = settings.provider.as_str();
+    let provider = stored_provider.trim();
+    let (slug, endpoint) = match provider.strip_prefix("custom:") {
+        Some(endpoint) => ("custom", Some(endpoint)),
+        None => (provider, None),
+    };
+    if matches!(slug, "cloud" | "managed") {
+        return managed(&settings.model, settings.dimensions);
+    }
+    let api_key = credentials(slug);
+    create_embedding_model(
+        slug,
+        &settings.model,
+        settings.dimensions,
+        &api_key,
+        endpoint,
+        &settings.ollama_base_url,
+    )
+}
+
+/// Builds the configured provider, falling back to the managed model when the
+/// selection is blank, invalid, or missing a required credential.
+pub fn create_default_embedding_model(
+    settings: &EmbeddingFactorySettings,
+    credentials: &CredentialResolver,
+    managed: &ManagedModelFactory,
+) -> Result<Box<dyn EmbeddingModel>> {
+    let provider = settings.provider.trim();
+    if provider.is_empty() || matches!(provider, "cloud" | "managed") {
+        return managed(DEFAULT_CLOUD_MODEL, DEFAULT_CLOUD_DIMENSIONS);
+    }
+
+    let slug = if provider.starts_with("custom:") {
+        "custom"
+    } else {
+        provider
+    };
+    let api_key = credentials(slug);
+    let requires_key = matches!(slug, "voyage" | "openai" | "cohere");
+    if requires_key && api_key.trim().is_empty() {
+        tracing::warn!(
+            provider = slug,
+            "configured embedding provider has no credential; falling back to managed"
+        );
+        return managed(DEFAULT_CLOUD_MODEL, DEFAULT_CLOUD_DIMENSIONS);
+    }
+
+    match create_configured_embedding_model(settings, credentials, managed) {
+        Ok(model) => Ok(model),
+        Err(error) => {
+            tracing::warn!(provider = slug, %error, "configured embedding provider failed to build; falling back to managed");
+            managed(DEFAULT_CLOUD_MODEL, DEFAULT_CLOUD_DIMENSIONS)
+        }
+    }
+}
 
 /// Build an embedding model for a named provider.
 ///

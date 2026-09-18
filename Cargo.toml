@@ -23,6 +23,8 @@ repository = "https://github.com/tinyhumansai/tinyinference"
 [workspace.dependencies]
 # Rich error chains exposed by subprocess and transport adapters.
 anyhow = "1"
+# In-process HTTP fixtures for provider and local-runtime tests.
+axum = "0.8"
 # Async provider and embedding traits do not prescribe a concrete runtime.
 async-trait = "0.1"
 # Reference-counted network chunks keep the SSE pipeline copy-free.

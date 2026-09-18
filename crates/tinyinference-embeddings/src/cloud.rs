@@ -15,6 +15,11 @@ pub const DEFAULT_CLOUD_DIMENSIONS: usize = 1024;
 /// Resolves the current bearer token for each request.
 pub type BearerResolver = Arc<dyn Fn() -> Result<String> + Send + Sync>;
 
+/// Host policy hook invoked immediately before an embedding batch may leave
+/// the process. This keeps privacy and audit policy in the host without
+/// requiring a host-owned embedding implementation.
+pub type EmbeddingEgressGuard = Arc<dyn Fn(&str, usize) -> Result<()> + Send + Sync>;
+
 /// Cloud model whose credential lifecycle remains owned by the host.
 pub struct CloudEmbeddingModel {
     client: reqwest::Client,
@@ -22,6 +27,7 @@ pub struct CloudEmbeddingModel {
     model: String,
     dimensions: usize,
     bearer: BearerResolver,
+    egress_guard: Option<EmbeddingEgressGuard>,
 }
 
 impl CloudEmbeddingModel {
@@ -38,7 +44,15 @@ impl CloudEmbeddingModel {
             model: model.into(),
             dimensions,
             bearer,
+            egress_guard: None,
         }
+    }
+
+    /// Installs a host-owned egress policy hook.
+    #[must_use]
+    pub fn with_egress_guard(mut self, guard: EmbeddingEgressGuard) -> Self {
+        self.egress_guard = Some(guard);
+        self
     }
 }
 
@@ -77,6 +91,9 @@ impl CloudEmbeddingModel {
                 texts.len(),
                 self.model
             )));
+        }
+        if let Some(guard) = &self.egress_guard {
+            guard(&self.model, texts.len())?;
         }
         let bearer = (self.bearer)()?;
         if bearer.trim().is_empty() {
