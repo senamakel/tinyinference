@@ -54,6 +54,20 @@ fn structured_provider_error_uses_the_same_classifier() {
 }
 
 #[test]
+fn normalized_provider_retryability_is_authoritative() {
+    let error = ProviderError {
+        message: "malformed streaming payload".into(),
+        retryable: false,
+        ..ProviderError::default()
+    };
+    assert_eq!(
+        classify_provider_error(&error),
+        ProviderFailureClass::NonRetryable
+    );
+    assert!(!provider_error_is_retryable(&error));
+}
+
+#[test]
 fn retry_after_accepts_integer_and_fractional_seconds() {
     assert_eq!(parse_retry_after_ms("Retry-After: 5"), Some(5_000));
     assert_eq!(
@@ -62,4 +76,9 @@ fn retry_after_accepts_integer_and_fractional_seconds() {
     );
     assert_eq!(parse_retry_after_ms("Retry-After 7"), Some(7_000));
     assert_eq!(parse_retry_after_ms("no retry hint"), None);
+    assert_eq!(
+        parse_retry_after_ms("Retry-After: 1000000000000000000000000000000"),
+        None
+    );
+    assert_eq!(parse_retry_after_ms("Retry-After: inf"), None);
 }

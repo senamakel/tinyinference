@@ -109,3 +109,35 @@ fn normalize_lm_studio_base_url_strips_known_endpoint_suffix() {
         Some("http://127.0.0.1:1234/v1")
     );
 }
+
+#[test]
+fn auth_is_only_attached_to_https_or_loopback_http() {
+    let client = reqwest::Client::new();
+    for endpoint in [
+        "https://lm.example.com/v1/models",
+        "http://localhost:1234/v1/models",
+        "http://127.0.0.1:1234/v1/models",
+        "http://[::1]:1234/v1/models",
+    ] {
+        let request = apply_lm_studio_auth(client.get(endpoint), Some("secret"))
+            .build()
+            .unwrap();
+        assert!(
+            request
+                .headers()
+                .contains_key(reqwest::header::AUTHORIZATION)
+        );
+    }
+
+    let request = apply_lm_studio_auth(
+        client.get("http://lm.example.com/v1/models"),
+        Some("secret"),
+    )
+    .build()
+    .unwrap();
+    assert!(
+        !request
+            .headers()
+            .contains_key(reqwest::header::AUTHORIZATION)
+    );
+}

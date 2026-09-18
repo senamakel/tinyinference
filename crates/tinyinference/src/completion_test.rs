@@ -94,3 +94,11 @@ fn sanitize_inline_completion_strips_numbered_list_prefix_paren() {
         "item"
     );
 }
+
+#[test]
+fn accidental_one_character_overlap_is_preserved() {
+    assert_eq!(
+        sanitize_inline_completion("takes a nap", "The cat"),
+        "takes a nap"
+    );
+}

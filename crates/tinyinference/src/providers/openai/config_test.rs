@@ -51,3 +51,35 @@ fn openrouter_endpoints_are_recognized() {
     assert!(endpoint_is_openrouter("HTTPS://OpenRouter.ai:443/api/v1/"));
     assert!(!endpoint_is_openrouter("https://notopenrouter.ai/api/v1"));
 }
+
+#[test]
+fn debug_redacts_credentials_and_header_values() {
+    let headers = vec![(
+        "Authorization".to_string(),
+        "Bearer header-secret".to_string(),
+    )];
+    let config = OpenAiConfig {
+        provider_name: "test",
+        endpoint: "https://example.com/v1",
+        api_key: "api-secret",
+        auth_style: AuthStyle::Bearer,
+        model: "model",
+        temperature_unsupported_models: &[],
+        temperature_override: None,
+        merge_system_into_user: false,
+        extra_headers: &headers,
+        native_tool_calling: None,
+        vision: None,
+        default_provider_options: None,
+        responses_api_primary: false,
+        responses_omit_max_output_tokens: false,
+        extra_query_params: &[],
+        user_agent: None,
+        explicit_cache_control: false,
+    };
+    let debug = format!("{config:?}");
+    assert!(!debug.contains("api-secret"));
+    assert!(!debug.contains("header-secret"));
+    assert!(debug.contains("[REDACTED]"));
+    assert!(debug.contains("Authorization"));
+}

@@ -90,3 +90,9 @@ fn neutral_constructor_returns_documented_defaults() {
     assert_eq!(r.valence, "neutral");
     assert!((r.confidence - 1.0).abs() < 0.01);
 }
+
+#[test]
+fn non_finite_confidence_uses_fallback() {
+    let result = parse_sentiment_response("joy positive NaN");
+    assert_eq!(result.confidence, 0.5);
+}

@@ -98,6 +98,21 @@ pub fn model_discovery_api(provider: &str, base_url: &str) -> ModelDiscoveryApi 
     if endpoint_is_openai_v1(base_url) {
         return ModelDiscoveryApi::OpenAiModels;
     }
+    if matches!(
+        provider.trim().to_ascii_lowercase().as_str(),
+        "lmstudio"
+            | "lm-studio"
+            | "lm_studio"
+            | "omlx"
+            | "omlx-server"
+            | "local-openai"
+            | "local_openai"
+            | "custom-openai"
+            | "custom_openai"
+            | "openai"
+    ) {
+        return ModelDiscoveryApi::OpenAiModels;
+    }
     match normalize_provider(provider).as_str() {
         "ollama" => ModelDiscoveryApi::OllamaTags,
         // lm_studio, omlx, and any other OpenAI-compatible local runtime.

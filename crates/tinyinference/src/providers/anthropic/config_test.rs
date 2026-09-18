@@ -28,3 +28,17 @@ fn builds_a_native_anthropic_model_with_the_configured_profile() {
     assert!(identity.contains("api.anthropic.com"));
     assert!(!identity.contains("sk-ant-secret"));
 }
+
+#[test]
+fn debug_redacts_api_key() {
+    let config = AnthropicConfig {
+        endpoint: "https://api.anthropic.com/v1",
+        api_key: "sk-ant-secret",
+        model: "claude-sonnet-4-6",
+        temperature_override: None,
+        temperature_unsupported_models: &[],
+    };
+    let debug = format!("{config:?}");
+    assert!(!debug.contains("sk-ant-secret"));
+    assert!(debug.contains("[REDACTED]"));
+}

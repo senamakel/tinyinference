@@ -7,7 +7,7 @@ use crate::model::ChatModel;
 use super::AnthropicModel;
 
 /// Resolved configuration for an Anthropic Messages provider.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AnthropicConfig<'a> {
     /// Base URL for the Messages API.
     pub endpoint: &'a str,
@@ -19,6 +19,22 @@ pub struct AnthropicConfig<'a> {
     pub temperature_override: Option<f64>,
     /// Model-id glob patterns whose targets reject temperature.
     pub temperature_unsupported_models: &'a [String],
+}
+
+impl std::fmt::Debug for AnthropicConfig<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AnthropicConfig")
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("temperature_override", &self.temperature_override)
+            .field(
+                "temperature_unsupported_models",
+                &self.temperature_unsupported_models,
+            )
+            .finish()
+    }
 }
 
 /// Returns whether an endpoint is Anthropic's first-party Messages API.

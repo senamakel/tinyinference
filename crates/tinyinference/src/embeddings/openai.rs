@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::EmbeddingModel;
 use super::retry_after::{MAX_RETRIES, backoff_ms_for_attempt};
@@ -52,7 +53,7 @@ pub struct OpenAiEmbeddingModel {
     api_key: String,
     model: String,
     base_url: String,
-    dimensions: usize,
+    dimensions: AtomicUsize,
     send_dimensions: bool,
     requires_api_key: bool,
 }
@@ -64,7 +65,7 @@ impl std::fmt::Debug for OpenAiEmbeddingModel {
             .field("api_key", &"[REDACTED]")
             .field("model", &self.model)
             .field("base_url", &self.base_url)
-            .field("dimensions", &self.dimensions)
+            .field("dimensions", &self.dimensions.load(Ordering::Relaxed))
             .field("send_dimensions", &self.send_dimensions)
             .field("requires_api_key", &self.requires_api_key)
             .finish_non_exhaustive()
@@ -80,7 +81,7 @@ impl OpenAiEmbeddingModel {
             api_key: api_key.into(),
             model: DEFAULT_MODEL.to_string(),
             base_url: DEFAULT_BASE_URL.to_string(),
-            dimensions: DEFAULT_DIMENSIONS,
+            dimensions: AtomicUsize::new(DEFAULT_DIMENSIONS),
             send_dimensions: true,
             requires_api_key: true,
         }
@@ -107,12 +108,11 @@ impl OpenAiEmbeddingModel {
     /// Overrides the reported dimensionality (and requests it from the API
     /// via the `dimensions` parameter, which `text-embedding-3-*` supports).
     ///
-    /// Zero enables dimension-discovery mode: the request omits `dimensions`
-    /// and accepts the vector length returned by the provider. Callers should
-    /// persist that discovered length before constructing a fixed-size vector
-    /// store.
+    /// Zero enables dimension-discovery mode: the request omits `dimensions`,
+    /// validates the provider's returned vectors, and atomically adopts their
+    /// length before [`EmbeddingModel::embed`] returns.
     pub fn with_dimensions(mut self, dimensions: usize) -> Self {
-        self.dimensions = dimensions;
+        self.dimensions = AtomicUsize::new(dimensions);
         self
     }
 
@@ -136,6 +136,26 @@ impl OpenAiEmbeddingModel {
     /// Returns the configured embedding model id.
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    pub(super) fn adopt_discovered_dimensions(&self, vectors: &[Vec<f32>]) -> Result<()> {
+        let discovered = vectors.first().map(Vec::len).unwrap_or(0);
+        if discovered == 0 || vectors.iter().any(|vector| vector.len() != discovered) {
+            return Err(Error::Embedding(
+                "openai embeddings returned inconsistent or empty vectors during dimension discovery"
+                    .into(),
+            ));
+        }
+        match self
+            .dimensions
+            .compare_exchange(0, discovered, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => Ok(()),
+            Err(established) if established == discovered => Ok(()),
+            Err(established) => Err(Error::Embedding(format!(
+                "openai embed dimension changed during discovery: expected {established}, got {discovered}"
+            ))),
+        }
     }
 
     /// Returns the complete embeddings endpoint URL.
@@ -207,8 +227,9 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
             "model": self.model,
             "input": texts,
         });
-        if self.send_dimensions && self.dimensions > 0 {
-            body["dimensions"] = json!(self.dimensions);
+        let dimensions = self.dimensions.load(Ordering::Acquire);
+        if self.send_dimensions && dimensions > 0 {
+            body["dimensions"] = json!(dimensions);
         }
 
         let mut response = None;
@@ -250,11 +271,15 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
         }
 
         let value: Value = serde_json::from_str(&text)?;
-        parse_vectors(&value, texts.len(), self.dimensions)
+        let vectors = parse_vectors(&value, texts.len(), dimensions)?;
+        if dimensions == 0 {
+            self.adopt_discovered_dimensions(&vectors)?;
+        }
+        Ok(vectors)
     }
 
     fn dimensions(&self) -> usize {
-        self.dimensions
+        self.dimensions.load(Ordering::Acquire)
     }
 }
 

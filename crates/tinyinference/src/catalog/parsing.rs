@@ -30,12 +30,12 @@ use super::*;
 /// Per-entry parsing ignores entries that don't have a usable string id/slug
 /// (lax on purpose — many OpenAI-compatible servers include malformed rows for
 /// capabilities they don't fully implement).
-pub fn parse_models_response(body: &serde_json::Value) -> Result<Vec<ModelInfo>, String> {
+pub fn parse_models_response(body: &serde_json::Value) -> crate::Result<Vec<ModelInfo>> {
     let obj = body.as_object().ok_or_else(|| {
-        format!(
+        crate::Error::Catalog(format!(
             "provider response is not a JSON object — endpoint is not OpenAI-compatible (got {} at top level)",
             json_value_kind(body)
-        )
+        ))
     })?;
 
     let (field_name, data_value) = obj
@@ -44,10 +44,10 @@ pub fn parse_models_response(body: &serde_json::Value) -> Result<Vec<ModelInfo>,
         .or_else(|| obj.get("models").map(|value| ("models", value)))
         .ok_or_else(|| {
         let keys = obj.keys().cloned().collect::<Vec<_>>().join(", ");
-        format!(
+        crate::Error::Catalog(format!(
                 "provider response missing `data` or `models` field — endpoint is not OpenAI-compatible (got keys: {})",
             keys
-        )
+        ))
     })?;
 
     // A null `data`/`models` field is a valid empty catalog ONLY on a success
@@ -64,10 +64,11 @@ pub fn parse_models_response(body: &serde_json::Value) -> Result<Vec<ModelInfo>,
     // (e.g. "error") with null `data` falls through to the descriptive error
     // below, which surfaces the `object` value for triage. Non-array kinds
     // (object/string/number/bool) likewise fall through.
-    let is_success_envelope = obj
-        .get("object")
-        .and_then(|value| value.as_str())
-        .is_none_or(|object| object.eq_ignore_ascii_case("list"));
+    let is_success_envelope = match obj.get("object") {
+        None => true,
+        Some(serde_json::Value::String(object)) => object.eq_ignore_ascii_case("list"),
+        Some(_) => false,
+    };
 
     if data_value.is_null() && is_success_envelope {
         tracing::info!(
@@ -85,12 +86,12 @@ pub fn parse_models_response(body: &serde_json::Value) -> Result<Vec<ModelInfo>,
             .get("object")
             .map(|v| v.to_string())
             .unwrap_or_else(|| "<absent>".to_string());
-        format!(
+        crate::Error::Catalog(format!(
             "provider response has `{}` field but it is {}, expected array — endpoint may be returning an error envelope (\"object\" = {})",
             field_name,
             json_value_kind(data_value),
             object_field,
-        )
+        ))
     })?;
 
     Ok(data
@@ -133,15 +134,6 @@ pub fn merge_openai_codex_model_hints(models: &mut Vec<ModelInfo>) {
             });
         }
     }
-}
-
-#[allow(dead_code)]
-/// Extract raw model entries from either supported catalog envelope.
-pub fn model_items_from_body(body: &serde_json::Value) -> Option<Vec<serde_json::Value>> {
-    body.get("data")
-        .and_then(|d| d.as_array())
-        .or_else(|| body.get("models").and_then(|d| d.as_array()))
-        .cloned()
 }
 
 fn model_info_from_catalog_item(item: &serde_json::Value) -> Option<ModelInfo> {

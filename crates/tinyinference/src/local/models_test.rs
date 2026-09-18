@@ -425,16 +425,14 @@ fn lm_studio_embedding_model_passes_through_arbitrary_id() {
 }
 
 #[test]
-fn lm_studio_embedding_model_empty_falls_back_to_default() {
-    // With no configured embedding id, fall back to the canonical default
-    // so the memory tree still has an embedder to request.
+fn lm_studio_embedding_model_empty_stays_unconfigured() {
     let mut config = test_config();
     config.local_ai.provider = "lm_studio".to_string();
     config.local_ai.embedding_model_id = String::new();
-    assert_eq!(effective_embedding_model_id(&config), "bge-m3");
+    assert_eq!(effective_embedding_model_id(&config), "");
 
     config.local_ai.embedding_model_id = "   ".to_string();
-    assert_eq!(effective_embedding_model_id(&config), "bge-m3");
+    assert_eq!(effective_embedding_model_id(&config), "");
 }
 
 #[test]

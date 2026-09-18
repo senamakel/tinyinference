@@ -1,7 +1,5 @@
 //! Provider-neutral failure classification shared by transport adapters.
 
-use std::time::Duration;
-
 /// Provider failure class used for retry and telemetry decisions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderFailureClass {
@@ -106,6 +104,8 @@ fn indicates_upstream_failure(lower: &str) -> bool {
         "502 bad gateway",
         "503 service unavailable",
         "504 gateway timeout",
+        "bad gateway",
+        "gateway timeout",
     ]
     .iter()
     .any(|hint| lower.contains(hint))
@@ -178,12 +178,17 @@ pub fn classify_provider_failure(
 
 /// Classifies a normalized structured provider error.
 pub fn classify_provider_error(error: &crate::model::ProviderError) -> ProviderFailureClass {
-    classify_provider_failure(error.status, error.code.as_deref(), &error.message)
+    let class = classify_provider_failure(error.status, error.code.as_deref(), &error.message);
+    if !error.retryable && class.is_retryable() {
+        ProviderFailureClass::NonRetryable
+    } else {
+        class
+    }
 }
 
 /// Returns whether a normalized provider error is safe to retry.
 pub fn provider_error_is_retryable(error: &crate::model::ProviderError) -> bool {
-    classify_provider_error(error).is_retryable()
+    error.retryable
 }
 
 /// Parses a `Retry-After` / `retry_after` value from provider error text.
@@ -207,7 +212,10 @@ pub fn parse_retry_after_ms(message: &str) -> Option<u64> {
                 && seconds.is_finite()
                 && seconds >= 0.0
             {
-                return u64::try_from(Duration::from_secs_f64(seconds).as_millis()).ok();
+                let milliseconds = seconds * 1_000.0;
+                if milliseconds <= u64::MAX as f64 {
+                    return Some(milliseconds as u64);
+                }
             }
         }
     }

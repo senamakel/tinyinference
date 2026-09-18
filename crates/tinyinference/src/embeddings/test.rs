@@ -377,3 +377,17 @@ fn openai_zero_dimensions_accepts_provider_vector_length() {
     let vectors = super::openai::parse_vectors(&value, 1, 0).unwrap();
     assert_eq!(vectors, vec![vec![1.0, 0.0, 0.5]]);
 }
+
+#[test]
+fn openai_dimension_discovery_updates_the_trait_contract() {
+    let model = OpenAiEmbeddingModel::new("test-key").with_dimensions(0);
+    model
+        .adopt_discovered_dimensions(&[vec![1.0, 0.0, 0.5]])
+        .unwrap();
+    assert_eq!(model.dimensions(), 3);
+    assert!(
+        model
+            .adopt_discovered_dimensions(&[vec![1.0, 0.0]])
+            .is_err()
+    );
+}

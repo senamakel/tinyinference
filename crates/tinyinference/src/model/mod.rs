@@ -177,9 +177,11 @@ pub fn model_id_supports_vision(model: &str) -> bool {
             || !(tag.starts_with("270m") || tag.starts_with("1b"));
     }
     VISION_FAMILIES.contains(&family)
-        || VISION_MARKERS
-            .iter()
-            .any(|marker| normalized.contains(marker))
+        || VISION_MARKERS.iter().any(|marker| {
+            normalized
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .any(|segment| segment == *marker)
+        })
 }
 
 /// Matches a model id against a case-insensitive `*` wildcard pattern.
@@ -193,23 +195,50 @@ pub fn model_id_glob_match(pattern: &str, model: &str) -> bool {
     if segments.len() == 1 {
         return pattern == model;
     }
-    let mut remaining = model.as_str();
-    for (index, segment) in segments.iter().enumerate() {
-        if segment.is_empty() {
-            continue;
-        }
-        if index == 0 {
-            if !remaining.starts_with(segment) {
-                return false;
-            }
-            remaining = &remaining[segment.len()..];
-        } else if let Some(offset) = remaining.find(segment) {
-            remaining = &remaining[offset + segment.len()..];
-        } else {
+    let leading_wildcard = pattern.starts_with('*');
+    let trailing_wildcard = pattern.ends_with('*');
+    let literals = segments
+        .into_iter()
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if literals.is_empty() {
+        return true;
+    }
+
+    let suffix_start = if trailing_wildcard {
+        model.len()
+    } else {
+        let suffix = literals.last().expect("non-empty literals");
+        let Some(start) = model.len().checked_sub(suffix.len()) else {
+            return false;
+        };
+        if !model.ends_with(suffix) {
             return false;
         }
+        start
+    };
+
+    let mut position = 0;
+    for (index, literal) in literals.iter().enumerate() {
+        if position > suffix_start {
+            return false;
+        }
+        if !trailing_wildcard && index + 1 == literals.len() {
+            return suffix_start >= position;
+        }
+        if index == 0 && !leading_wildcard {
+            if !model.starts_with(literal) {
+                return false;
+            }
+            position = literal.len();
+            continue;
+        }
+        let Some(offset) = model[position..suffix_start].find(literal) else {
+            return false;
+        };
+        position += offset + literal.len();
     }
-    pattern.ends_with('*') || remaining.is_empty()
+    true
 }
 
 /// Resolves the temperature to send for a model call.

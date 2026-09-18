@@ -62,7 +62,11 @@ pub fn parse_sentiment_response(text: &str) -> SentimentResult {
         "neutral".to_string()
     };
 
-    let confidence = confidence.clamp(0.0, 1.0);
+    let confidence = if confidence.is_finite() {
+        confidence.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
 
     SentimentResult {
         emotion,

@@ -67,4 +67,8 @@ fn model_discovery_api_uses_v1_models_for_openai_compatible() {
         model_discovery_api("custom-byok", "http://localhost:1234/v1"),
         ModelDiscoveryApi::OpenAiModels
     );
+    assert_eq!(
+        model_discovery_api("local-openai", "http://localhost:1234"),
+        ModelDiscoveryApi::OpenAiModels
+    );
 }

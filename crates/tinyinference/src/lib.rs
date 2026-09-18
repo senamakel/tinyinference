@@ -6,7 +6,6 @@
 //! embedding clients. It deliberately contains no agent loop, graph runtime,
 //! middleware stack, registry, or workspace policy.
 
-pub mod auth_errors;
 pub mod cache;
 pub mod catalog;
 pub mod classification;

@@ -1,7 +1,9 @@
 //! Device profile detection for guided model selection.
 
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use sysinfo::System;
 
 static DEVICE_PROFILE_CACHE: OnceLock<DeviceProfile> = OnceLock::new();
@@ -126,13 +128,36 @@ fn probe_nvidia_smi() -> Option<String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let output = cmd.output().ok()?;
+    let mut child = cmd.spawn().ok()?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                tracing::debug!("nvidia-smi probe timed out; terminating child process");
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
 
-    if !output.status.success() {
+    if !status.success() {
         return None;
     }
 
-    let name = String::from_utf8_lossy(&output.stdout)
+    let mut stdout = Vec::new();
+    child.stdout.take()?.read_to_end(&mut stdout).ok()?;
+
+    let name = String::from_utf8_lossy(&stdout)
         .lines()
         .next()?
         .trim()

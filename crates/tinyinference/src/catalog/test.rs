@@ -36,7 +36,7 @@ fn parses_openai_and_codex_catalogs() {
 fn distinguishes_missing_wrong_type_and_non_object_envelopes() {
     let err = parse_models_response(&serde_json::json!({ "items": [] }))
         .expect_err("missing catalog field");
-    assert!(err.contains("missing `data` or `models` field"));
+    assert!(err.to_string().contains("missing `data` or `models` field"));
 
     for (kind, value) in [
         ("object", serde_json::json!({"message": "boom"})),
@@ -46,7 +46,7 @@ fn distinguishes_missing_wrong_type_and_non_object_envelopes() {
     ] {
         let err = parse_models_response(&serde_json::json!({ "data": value }))
             .expect_err("wrong catalog field type");
-        assert!(err.contains(kind), "{err}");
+        assert!(err.to_string().contains(kind), "{err}");
     }
 
     for value in [
@@ -55,7 +55,7 @@ fn distinguishes_missing_wrong_type_and_non_object_envelopes() {
         serde_json::Value::Null,
     ] {
         let err = parse_models_response(&value).expect_err("non-object response");
-        assert!(err.contains("not a JSON object"));
+        assert!(err.to_string().contains("not a JSON object"));
     }
 }
 
@@ -74,7 +74,14 @@ fn null_is_empty_only_for_success_envelopes() {
 
     let err = parse_models_response(&serde_json::json!({ "object": "error", "data": null }))
         .expect_err("error envelope");
-    assert!(err.contains(r#""object" = "error""#));
+    assert!(err.to_string().contains(r#""object" = "error""#));
+
+    let err = parse_models_response(&serde_json::json!({
+        "object": {"error": "boom"},
+        "data": null
+    }))
+    .expect_err("non-string object marker must not denote success");
+    assert!(err.to_string().contains("expected array"));
 }
 
 #[test]
@@ -95,21 +102,5 @@ fn codex_hints_are_merged_without_duplicates() {
     assert_eq!(
         ids,
         ["gpt-5.4", "gpt-5.5", "gpt-5.3-codex-spark", "gpt-5.3-codex"]
-    );
-}
-
-#[test]
-fn raw_items_support_only_array_envelopes() {
-    assert_eq!(
-        model_items_from_body(&serde_json::json!({ "data": ["m1"] })),
-        Some(vec![serde_json::json!("m1")])
-    );
-    assert_eq!(
-        model_items_from_body(&serde_json::json!({ "models": ["m2"] })),
-        Some(vec![serde_json::json!("m2")])
-    );
-    assert_eq!(
-        model_items_from_body(&serde_json::json!({ "data": null })),
-        None
     );
 }

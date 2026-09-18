@@ -319,14 +319,11 @@ pub fn effective_embedding_model_id(config: &impl LocalModelConfig) -> String {
     // below, where the ids are OpenHuman-pulled assets.
     if provider_from_name(config.local_provider_name()) == LocalAiProvider::LmStudio {
         if raw.is_empty() {
-            // No configured id — fall back to the canonical default so the
-            // memory tree still has an embedder to request, rather than
-            // sending an empty model name to the LM Studio server.
             tracing::debug!(
                 provider = LocalAiProvider::LmStudio.as_str(),
-                "[local_ai] effective_embedding_model_id: no LM Studio embedding model configured, using default"
+                "[local_ai] effective_embedding_model_id: no LM Studio embedding model configured"
             );
-            return DEFAULT_OLLAMA_EMBED_MODEL.to_string();
+            return String::new();
         }
         tracing::debug!(
             provider = LocalAiProvider::LmStudio.as_str(),

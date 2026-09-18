@@ -106,6 +106,27 @@ pub fn apply_lm_studio_auth(
 ) -> reqwest::RequestBuilder {
     match api_key.map(str::trim) {
         Some(key) if !key.is_empty() => {
+            let safe_target = request
+                .try_clone()
+                .and_then(|candidate| candidate.build().ok())
+                .is_some_and(|candidate| {
+                    candidate.url().scheme() == "https"
+                        || (candidate.url().scheme() == "http"
+                            && candidate.url().host().is_some_and(|host| match host {
+                                url::Host::Domain(domain) => {
+                                    domain.eq_ignore_ascii_case("localhost")
+                                }
+                                url::Host::Ipv4(address) => address.is_loopback(),
+                                url::Host::Ipv6(address) => address.is_loopback(),
+                            }))
+                });
+            if !safe_target {
+                tracing::warn!(
+                    api_key_present = true,
+                    "[lm-studio] refusing to attach credentials to a non-HTTPS remote endpoint"
+                );
+                return request;
+            }
             tracing::trace!(
                 api_key_present = true,
                 api_key_len = key.len(),

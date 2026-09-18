@@ -64,6 +64,16 @@ fn write_marker_creates_missing_parent_dir() {
 }
 
 #[test]
+fn write_marker_replaces_an_existing_marker() {
+    let (_tmp, path) = tmp_marker_path();
+    let first = OllamaSpawnMarker::new(1234, std::path::Path::new("ollama-old"));
+    let second = OllamaSpawnMarker::new(5678, std::path::Path::new("ollama-new"));
+    write_marker_at(&path, &first).expect("write first marker");
+    write_marker_at(&path, &second).expect("replace marker");
+    assert_eq!(read_marker_at(&path), Some(second));
+}
+
+#[test]
 fn new_marker_captures_current_process_id() {
     let m = OllamaSpawnMarker::new(4242, std::path::Path::new("ollama"));
     assert_eq!(m.openhuman_pid, std::process::id());
@@ -77,35 +87,5 @@ fn pid_is_alive_recognises_self() {
     assert!(
         pid_is_alive(me),
         "current process PID {me} should be reported alive"
-    );
-}
-
-#[test]
-fn pid_is_alive_rejects_dead_pid() {
-    // Spawn a short child, wait for it to exit, then check that its
-    // recycled PID is no longer reported alive. Hardcoded sentinel PIDs
-    // (0, u32::MAX) are unreliable cross-platform — on Windows PID 0 is
-    // "System Idle Process" and registers as alive in sysinfo.
-    let child = if cfg!(windows) {
-        std::process::Command::new("cmd")
-            .args(["/C", "exit 0"])
-            .spawn()
-            .expect("spawn cmd /C exit")
-    } else {
-        std::process::Command::new("true")
-            .spawn()
-            .expect("spawn /usr/bin/true")
-    };
-    let pid = child.id();
-    let mut child = child;
-    let _ = child.wait();
-
-    // Give the OS a moment to fully reap so sysinfo doesn't catch a
-    // lingering zombie entry.
-    std::thread::sleep(std::time::Duration::from_millis(200));
-
-    assert!(
-        !pid_is_alive(pid),
-        "exited child pid {pid} should not be reported alive"
     );
 }

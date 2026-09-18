@@ -150,7 +150,7 @@ pub const LM_STUDIO_PROFILE: LocalProviderProfile = LocalProviderProfile {
         merge_system_into_user: false,
     },
     default_base_url: "http://127.0.0.1:1234/v1",
-    base_url_env: "LM_STUDIO_URL",
+    base_url_env: "LM_STUDIO_BASE_URL",
 };
 
 /// MLX-compatible server profile (mlx_lm.server, etc.).

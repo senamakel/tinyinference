@@ -22,6 +22,9 @@ pub enum Error {
     /// A provider payload could not be encoded or decoded.
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+    /// A provider model catalog used an invalid response envelope.
+    #[error("catalog error: {0}")]
+    Catalog(String),
     /// Embedding generation or vector-store behavior failed.
     #[error("embedding error: {0}")]
     Embedding(String),

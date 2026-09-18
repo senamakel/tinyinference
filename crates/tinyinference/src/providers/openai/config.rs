@@ -9,7 +9,7 @@ use crate::model::ChatModel;
 use super::{AuthStyle, OpenAiModel};
 
 /// Resolved configuration for an OpenAI-compatible provider.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct OpenAiConfig<'a> {
     /// Provider family identifier used in profiles and normalized errors.
     pub provider_name: &'a str,
@@ -45,6 +45,41 @@ pub struct OpenAiConfig<'a> {
     pub user_agent: Option<&'a str>,
     /// Emit explicit prompt-cache breakpoints.
     pub explicit_cache_control: bool,
+}
+
+impl std::fmt::Debug for OpenAiConfig<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let header_names = self
+            .extra_headers
+            .iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        formatter
+            .debug_struct("OpenAiConfig")
+            .field("provider_name", &self.provider_name)
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &"[REDACTED]")
+            .field("auth_style", &self.auth_style)
+            .field("model", &self.model)
+            .field(
+                "temperature_unsupported_models",
+                &self.temperature_unsupported_models,
+            )
+            .field("temperature_override", &self.temperature_override)
+            .field("merge_system_into_user", &self.merge_system_into_user)
+            .field("extra_header_names", &header_names)
+            .field("native_tool_calling", &self.native_tool_calling)
+            .field("vision", &self.vision)
+            .field("responses_api_primary", &self.responses_api_primary)
+            .field(
+                "responses_omit_max_output_tokens",
+                &self.responses_omit_max_output_tokens,
+            )
+            .field("extra_query_params", &self.extra_query_params)
+            .field("user_agent", &self.user_agent)
+            .field("explicit_cache_control", &self.explicit_cache_control)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Returns whether an endpoint is OpenRouter's first-party API.

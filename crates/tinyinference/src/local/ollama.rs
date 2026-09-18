@@ -109,7 +109,10 @@ pub fn resolve_ollama_base_url(app_override: Option<&str>, ollama_host: Option<&
             } else {
                 format!("http://{trimmed}")
             };
-            tracing::debug!("[local_ai] ollama_base_url: using OLLAMA_HOST -> {url}");
+            tracing::debug!(
+                "[local_ai] ollama_base_url: using OLLAMA_HOST -> {}",
+                redact_ollama_base_url(&url)
+            );
             return reject_registry_host_or_default(normalize_unspecified_host(&url));
         }
     }

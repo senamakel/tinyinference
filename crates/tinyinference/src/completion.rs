@@ -117,7 +117,8 @@ pub fn sanitize_inline_completion(raw: &str, context: &str) -> String {
                 .count()
                 .min(cleaned_chars.len())
                 .min(160);
-            for overlap in (1..=max_overlap).rev() {
+            const MIN_OVERLAP_CHARS: usize = 3;
+            for overlap in (MIN_OVERLAP_CHARS..=max_overlap).rev() {
                 let overlap_prefix: String = cleaned_chars.iter().take(overlap).collect();
                 if context_norm.ends_with(&overlap_prefix) {
                     cleaned = cleaned_chars

@@ -72,10 +72,7 @@ fn resolve_openai_codex_client_version_from(
     }
 
     if let Some(home) = codex_home {
-        tracing::trace!(
-            "[providers][openai-codex] client_version probing codex home={}",
-            home.display()
-        );
+        tracing::trace!("[providers][openai-codex] probing configured Codex home");
         if let Some(version) =
             read_json_string_field(&home.join("models_cache.json"), "client_version")
         {

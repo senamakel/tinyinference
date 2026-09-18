@@ -152,6 +152,7 @@ fn model_id_vision_capability_is_conservative() {
         "llama3.1:8b",
         "qwen2.5:14b",
         "bge-m3",
+        "acme-visionary-text",
     ] {
         assert!(!model_id_supports_vision(model), "{model}");
     }
@@ -162,6 +163,8 @@ fn model_id_globs_and_temperature_policy_are_provider_neutral() {
     assert!(model_id_glob_match("o1*", "O1-preview"));
     assert!(model_id_glob_match("*turbo", "gpt-4-turbo"));
     assert!(model_id_glob_match("*mid*", "a-middle-b"));
+    assert!(model_id_glob_match("*a", "aa"));
+    assert!(model_id_glob_match("foo*bar", "foobarbar"));
     assert!(!model_id_glob_match("gpt-4o", "gpt-4o-mini"));
     assert!(!model_id_glob_match("foo*foo", "foo"));
 
