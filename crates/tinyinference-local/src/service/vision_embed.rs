@@ -18,6 +18,16 @@ use tinyinference_embeddings::{
 
 use super::LocalAiService;
 
+fn embedding_ollama_base(config: &Config) -> String {
+    if crate::provider::provider_from_name(&config.local_ai.provider)
+        == crate::provider::LocalAiProvider::LmStudio
+    {
+        ollama_base_url_from_override(None)
+    } else {
+        ollama_base_url_from_override(config.local_ai.base_url.as_deref())
+    }
+}
+
 fn extract_ollama_image_payload(image_ref: &str) -> Option<String> {
     let data_uri = image_ref.starts_with("data:");
     let payload = if data_uri {
@@ -238,7 +248,7 @@ impl LocalAiService {
         // Embeds are bge-m3 calls (8K context, ~1.3 GB resident) — the
         // single concurrent embed that has historically crashed the
         // user's laptop when stacked with other Ollama work. Gate it.
-        let embed_base = ollama_base_url_from_override(config.local_ai.base_url.as_deref());
+        let embed_base = embedding_ollama_base(config);
         let dimensions = known_ollama_embedding_dimensions(&embedding_model);
         log::debug!(
             "[local_ai:embed] embed: using model={} dimensions={} base_url={}",

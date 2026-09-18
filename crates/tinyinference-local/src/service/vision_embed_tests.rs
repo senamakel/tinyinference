@@ -1,4 +1,12 @@
 use super::*;
+
+#[test]
+fn lm_studio_embedding_sidecar_uses_the_ollama_endpoint() {
+    let mut config = Config::default();
+    config.local_ai.provider = "lm_studio".to_string();
+    config.local_ai.base_url = Some("https://lm.example/v1".to_string());
+    assert_ne!(embedding_ollama_base(&config), "https://lm.example/v1");
+}
 use axum::{Json, Router, routing::post};
 use serde_json::json;
 

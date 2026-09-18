@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Maximum accepted base64 audio input length.
 pub const MAX_AUDIO_BASE64_LEN: usize = 33_554_432;
+const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 /// Default hosted transcription model.
 pub const DEFAULT_MODEL: &str = "whisper-v1";
 
@@ -75,24 +76,68 @@ pub async fn transcribe(
         .await
         .map_err(|error| format!("transcription request failed: {error}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("read transcription response failed: {error}"))?;
+    let body = bounded_response_body(response).await?;
+    let safe_body = sanitize_response_detail(&body, bearer_token);
     if !status.is_success() {
-        return Err(format!("transcription request failed ({status}): {body}"));
+        return Err(format!(
+            "transcription request failed ({status}): {safe_body}"
+        ));
     }
-    let value: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|error| format!("parse transcription response failed: {error}; body={body}"))?;
+    let value: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
+        format!("parse transcription response failed: {error}; body={safe_body}")
+    })?;
     let text = value
         .get("text")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| format!("transcription response missing string `text`: {body}"))?
+        .ok_or_else(|| format!("transcription response missing string `text`: {safe_body}"))?
         .trim()
         .to_string();
     Ok(CloudTranscribeResult { text })
 }
 
+async fn bounded_response_body(mut response: reqwest::Response) -> Result<String, String> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("read transcription response failed: {error}"))?
+    {
+        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(format!(
+                "transcription response exceeds {MAX_RESPONSE_BYTES} bytes"
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body)
+        .map_err(|error| format!("transcription response was not UTF-8: {error}"))
+}
+
+fn sanitize_response_detail(body: &str, bearer_token: &str) -> String {
+    let redacted = if bearer_token.trim().is_empty() {
+        body.to_string()
+    } else {
+        body.replace(bearer_token.trim(), "[REDACTED]")
+    };
+    tinyinference_core::sanitize::sanitize_api_error(&redacted)
+}
+
 fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_sanitization_removes_exact_and_prefixed_secrets() {
+        let detail = sanitize_response_detail(
+            "authorization=opaque-token and sk-provider-secret",
+            "opaque-token",
+        );
+        assert!(!detail.contains("opaque-token"));
+        assert!(!detail.contains("sk-provider-secret"));
+        assert!(detail.contains("[REDACTED]"));
+    }
 }

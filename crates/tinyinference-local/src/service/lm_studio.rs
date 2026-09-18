@@ -35,13 +35,15 @@ impl LocalAiService {
     ) -> Result<Vec<OllamaModelTag>, String> {
         let base = lm_studio_base_url(config.local_ai.base_url.as_deref());
         let url = format!("{base}/models");
+        let safe_base = tinyinference_core::sanitize::redact_url(&base);
+        let safe_url = tinyinference_core::sanitize::redact_url(&url);
         // GH #5055: log the *resolved* discovery URL so a wrong base URL is
         // diagnosable from app logs alone, without reproducing against the
         // runtime's own request log.
         tracing::debug!(
             target: "local_ai::lm_studio",
-            %base,
-            discovery_url = %url,
+            base = %safe_base,
+            discovery_url = %safe_url,
             api = "openai_v1_models",
             "[local_ai:lm_studio] list_models: resolved discovery URL — sending GET"
         );
@@ -56,7 +58,7 @@ impl LocalAiService {
             .map_err(|e| {
                 tracing::debug!(
                     target: "local_ai::lm_studio",
-                    %url,
+                    url = %safe_url,
                     error = %e,
                     "[local_ai:lm_studio] list_models: request failed"
                 );
@@ -69,7 +71,7 @@ impl LocalAiService {
             let detail = body.trim();
             tracing::debug!(
                 target: "local_ai::lm_studio",
-                %url,
+                url = %safe_url,
                 %status,
                 body = %diagnostic_body_snippet(&body),
                 "[local_ai:lm_studio] list_models: non-success response"
@@ -102,7 +104,7 @@ impl LocalAiService {
         let body = response.text().await.map_err(|e| {
             tracing::debug!(
                 target: "local_ai::lm_studio",
-                %url,
+                url = %safe_url,
                 error = %e,
                 "[local_ai:lm_studio] list_models: body read failed"
             );
@@ -111,7 +113,7 @@ impl LocalAiService {
         let payload: LmStudioModelsResponse = serde_json::from_str(&body).map_err(|e| {
             tracing::debug!(
                 target: "local_ai::lm_studio",
-                %url,
+                url = %safe_url,
                 error = %e,
                 body = %diagnostic_body_snippet(&body),
                 "[local_ai:lm_studio] list_models: parse failed"
@@ -144,10 +146,12 @@ impl LocalAiService {
         base: &str,
     ) -> Option<Vec<OllamaModelTag>> {
         let fallback_url = ollama_tags_fallback_url(base);
+        let safe_base = tinyinference_core::sanitize::redact_url(base);
+        let safe_fallback_url = tinyinference_core::sanitize::redact_url(&fallback_url);
         tracing::warn!(
             target: "local_ai::lm_studio",
-            %base,
-            discovery_url = %fallback_url,
+            base = %safe_base,
+            discovery_url = %safe_fallback_url,
             api = "ollama_api_tags",
             "[local_ai:lm_studio] list_models: /v1/models returned 404 — retrying once against \
              the Ollama-native /api/tags. Check the configured base URL: an OpenAI-compatible \
@@ -166,7 +170,7 @@ impl LocalAiService {
             Err(e) => {
                 tracing::debug!(
                     target: "local_ai::lm_studio",
-                    url = %fallback_url,
+                    url = %safe_fallback_url,
                     error = %e,
                     "[local_ai:lm_studio] /api/tags fallback request failed"
                 );
@@ -178,7 +182,7 @@ impl LocalAiService {
         if !status.is_success() {
             tracing::debug!(
                 target: "local_ai::lm_studio",
-                url = %fallback_url,
+                url = %safe_fallback_url,
                 %status,
                 "[local_ai:lm_studio] /api/tags fallback returned non-success"
             );
@@ -190,7 +194,7 @@ impl LocalAiService {
             Err(e) => {
                 tracing::debug!(
                     target: "local_ai::lm_studio",
-                    url = %fallback_url,
+                    url = %safe_fallback_url,
                     error = %e,
                     "[local_ai:lm_studio] /api/tags fallback body read failed"
                 );
@@ -202,7 +206,7 @@ impl LocalAiService {
             Err(e) => {
                 tracing::debug!(
                     target: "local_ai::lm_studio",
-                    url = %fallback_url,
+                    url = %safe_fallback_url,
                     error = %e,
                     body = %diagnostic_body_snippet(&body),
                     "[local_ai:lm_studio] /api/tags fallback parse failed"
@@ -226,7 +230,7 @@ impl LocalAiService {
         {
             tracing::debug!(
                 target: "local_ai::lm_studio",
-                url = %fallback_url,
+                url = %safe_fallback_url,
                 error = %error,
                 "[local_ai:lm_studio] /api/tags fallback returned an error envelope — not a recovery"
             );
@@ -235,14 +239,14 @@ impl LocalAiService {
         if payload.models.is_empty() {
             tracing::info!(
                 target: "local_ai::lm_studio",
-                url = %fallback_url,
+                url = %safe_fallback_url,
                 "[local_ai:lm_studio] /api/tags fallback reached a reachable runtime with an empty catalog — recovering as zero models"
             );
         }
 
         tracing::info!(
             target: "local_ai::lm_studio",
-            url = %fallback_url,
+            url = %safe_fallback_url,
             model_count = payload.models.len(),
             "[local_ai:lm_studio] recovered model discovery via the Ollama /api/tags fallback"
         );

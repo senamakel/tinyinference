@@ -10,7 +10,7 @@ use crate::provider::{LocalAiProvider, provider_from_name};
 use crate::service::RuntimeConfig as Config;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest};
-use tinyinference_llm::providers::openai::OpenAiModel;
+use tinyinference_llm::providers::openai::{AuthStyle, OpenAiModel};
 use tinyinference_llm::providers::{ProviderKind, ProviderSpec};
 
 pub(super) struct ModelRpcOutcome {
@@ -45,6 +45,7 @@ fn local_model(config: &Config, model_id: &str) -> Result<OpenAiModel, String> {
             // routes to the same private `local_runtime` construction
             // (auth-style none, vision/native-tool-choice/json-object off,
             // context probing enabled) that the old preset used.
+            let api_key = config.local_ai.api_key.as_deref().unwrap_or_default();
             OpenAiModel::from_spec(
                 ProviderSpec {
                     kind: ProviderKind::LmStudio,
@@ -54,8 +55,15 @@ fn local_model(config: &Config, model_id: &str) -> Result<OpenAiModel, String> {
                     api_key_env: None,
                     requires_api_key: false,
                 },
-                config.local_ai.api_key.as_deref().unwrap_or_default(),
+                api_key,
             )
+            .map(|model| {
+                model.with_auth_style(if api_key.trim().is_empty() {
+                    AuthStyle::None
+                } else {
+                    AuthStyle::Bearer
+                })
+            })
         }
         LocalAiProvider::Ollama => {
             let base = ollama_base_url_from_override(config.local_ai.base_url.as_deref());
