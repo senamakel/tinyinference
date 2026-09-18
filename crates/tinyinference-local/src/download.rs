@@ -473,8 +473,9 @@ async fn commit_download(part_path: &Path, dest: &Path, log_prefix: &str) -> cra
     })?;
     if let Err(error) = tokio::fs::rename(part_path, dest).await {
         let restore = tokio::fs::rename(&backup, dest).await;
+        let cleanup = tokio::fs::remove_file(part_path).await;
         return Err(crate::Error::DownloadIo(format!(
-            "{log_prefix} commit replacement {} -> {}: {error}; restore={restore:?}",
+            "{log_prefix} commit replacement {} -> {}: {error}; restore={restore:?}; cleanup={cleanup:?}",
             part_path.display(),
             dest.display()
         )));

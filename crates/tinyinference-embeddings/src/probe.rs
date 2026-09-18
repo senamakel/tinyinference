@@ -1,5 +1,5 @@
-//! The setup-time embed probe: sending one width-agnostic request to a custom
-//! endpoint and classifying what came back into an accept-or-reject verdict.
+//! The setup-time embed probe: sending one request to a custom endpoint and
+//! classifying what came back into an accept-or-reject verdict.
 
 use crate::model_supports_dimensions;
 
@@ -16,33 +16,30 @@ pub struct EmbeddingProbeRejection {
     pub detail: Option<String>,
 }
 
-/// Send one OpenAI-compatible embedding request without requesting or
-/// validating a vector width. This is intentionally separate from the live
-/// provider: a setup probe must discover a custom endpoint's native width,
-/// while a live provider must enforce the width persisted after that probe.
+/// Send one OpenAI-compatible embedding request. Models with configurable
+/// widths are probed at the requested width; other models discover their native
+/// width. This remains separate from the live provider so setup can validate
+/// configuration before it is persisted.
 pub async fn probe_custom_embeddings(
     endpoint: &str,
     api_key: &str,
     model: &str,
+    configured_dimensions: usize,
 ) -> Result<Vec<Vec<f32>>, String> {
-    let base = endpoint.trim_end_matches('/');
-    let url = if base.ends_with("/embeddings") {
-        base.to_string()
-    } else if base.ends_with("/v1") {
-        format!("{base}/embeddings")
-    } else {
-        format!("{base}/v1/embeddings")
-    };
-    let mut request = reqwest::Client::new()
-        .post(&url)
-        .json(&serde_json::json!({ "model": model, "input": ["connection test"] }));
+    let url = embeddings_probe_url(endpoint)?;
+    let safe_url = tinyinference_core::sanitize::redact_url(url.as_str());
+    let mut body = serde_json::json!({ "model": model, "input": ["connection test"] });
+    if model_supports_dimensions(model) && configured_dimensions > 0 {
+        body["dimensions"] = serde_json::json!(configured_dimensions);
+    }
+    let mut request = reqwest::Client::new().post(url).json(&body);
     if !api_key.trim().is_empty() {
         request = request.bearer_auth(api_key.trim());
     }
     let response = request
         .send()
         .await
-        .map_err(|e| format!("custom embeddings request to {url} failed: {e}"))?;
+        .map_err(|e| format!("custom embeddings request to {safe_url} failed: {e}"))?;
     let status = response.status();
     let body = response
         .text()
@@ -57,7 +54,8 @@ pub async fn probe_custom_embeddings(
         .and_then(serde_json::Value::as_array)
         .cloned()
         .ok_or_else(|| "custom embeddings response missing data array".to_string())?;
-    data.into_iter()
+    let vectors = data
+        .into_iter()
         .map(|item| {
             item.get("embedding")
                 .and_then(serde_json::Value::as_array)
@@ -70,23 +68,63 @@ pub async fn probe_custom_embeddings(
                 })
                 .collect()
         })
-        .collect()
+        .collect::<Result<Vec<Vec<f32>>, String>>()?;
+    if model_supports_dimensions(model)
+        && configured_dimensions > 0
+        && vectors
+            .iter()
+            .any(|vector| vector.len() != configured_dimensions)
+    {
+        let actual = vectors.first().map(Vec::len).unwrap_or(0);
+        return Err(format!(
+            "custom embeddings dimension mismatch: expected {configured_dimensions}, got {actual}"
+        ));
+    }
+    Ok(vectors)
+}
+
+fn embeddings_probe_url(endpoint: &str) -> Result<url::Url, String> {
+    let mut url = url::Url::parse(endpoint.trim())
+        .map_err(|e| format!("invalid custom embeddings endpoint: {e}"))?;
+    let path = url.path().trim_end_matches('/');
+    let path = if path.ends_with("/embeddings") {
+        path.to_string()
+    } else if path.ends_with("/v1") {
+        format!("{path}/embeddings")
+    } else {
+        format!("{path}/v1/embeddings")
+    };
+    url.set_path(&path);
+    Ok(url)
 }
 
 /// Dimension to persist after a successful Custom verification probe.
 ///
-/// For a `text-embedding-3-*` model the endpoint honoured the requested size,
-/// so keep the user's `configured` value (Matryoshka). For every other model we
-/// probed dimension-agnostically, so adopt the endpoint's actual returned
-/// length (`actual`) — the user can't be expected to know it, and storing the
-/// real size is what lets the live embed path's length guard pass afterwards.
+/// The probe sends and verifies a configurable width when the model supports
+/// it. Every successful probe can therefore persist the actual returned length
+/// (`actual`) without assuming that a server honoured a request parameter.
 /// Falls back to `configured` if the probe somehow reported a zero-length
 /// vector (defensive — `classify_embed_probe` already rejects empty vectors).
-pub fn final_probe_dims(model: &str, configured: usize, actual: usize) -> usize {
-    if model_supports_dimensions(model) || actual == 0 {
-        configured
-    } else {
-        actual
+pub fn final_probe_dims(_model: &str, configured: usize, actual: usize) -> usize {
+    if actual == 0 { configured } else { actual }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_url_appends_path_before_query_parameters() {
+        let url = embeddings_probe_url("https://host.example/v1?api-version=2026").unwrap();
+        assert_eq!(url.path(), "/v1/embeddings");
+        assert_eq!(url.query(), Some("api-version=2026"));
+    }
+
+    #[test]
+    fn final_dimensions_use_the_proven_response_width() {
+        assert_eq!(final_probe_dims("text-embedding-3-large", 1024, 3072), 3072);
+        assert_eq!(final_probe_dims("bge-m3", 1024, 768), 768);
+        assert_eq!(final_probe_dims("bge-m3", 1024, 0), 1024);
     }
 }
 
