@@ -254,8 +254,6 @@ pub async fn install_piper(
     voice_id: Option<String>,
     force_reinstall: bool,
 ) -> Result<VoiceInstallStatus> {
-    let _slot = try_acquire_install_slot(ENGINE_PIPER)
-        .ok_or_else(|| Error::InstallInProgress(ENGINE_PIPER.to_string()))?;
     let voice = voice_id
         .as_deref()
         .map(str::trim)
@@ -272,6 +270,8 @@ pub async fn install_piper(
             "Piper voice ID must have locale-name-quality segments".to_string(),
         ));
     }
+    let _slot = try_acquire_install_slot(ENGINE_PIPER)
+        .ok_or_else(|| Error::InstallInProgress(ENGINE_PIPER.to_string()))?;
     tracing::debug!(
         "{LOG_PREFIX} install requested voice={voice} force_reinstall={force_reinstall}"
     );
