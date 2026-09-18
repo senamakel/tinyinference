@@ -1771,7 +1771,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
                 ModelStreamItem::MessageDelta(delta),
                 ModelStreamItem::Completed(response),
             ];
-            return Ok(Box::pin(futures::stream::iter(items)));
+            return Ok(ModelStream::new(Box::pin(futures::stream::iter(items))));
         }
         let response = self
             .post_chat_with_degrade(&request, true, "stream request")
@@ -1811,7 +1811,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
                 ModelStreamItem::MessageDelta(delta),
                 ModelStreamItem::Completed(parsed),
             ];
-            return Ok(Box::pin(futures::stream::iter(items)));
+            return Ok(ModelStream::new(Box::pin(futures::stream::iter(items))));
         }
 
         // Forward each raw chunk as the `bytes::Bytes` buffer reqwest already
@@ -1843,14 +1843,14 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             && !request.tools.is_empty()
             && request.tool_choice != ToolChoice::None
         {
-            return Ok(Box::pin(stream.map(|item| match item {
+            return Ok(ModelStream::new(Box::pin(stream.map(|item| match item {
                 ModelStreamItem::Completed(response) => {
                     ModelStreamItem::Completed(prompt_tools::apply_to_response(response))
                 }
                 other => other,
-            })));
+            }))));
         }
-        Ok(Box::pin(stream))
+        Ok(ModelStream::new(Box::pin(stream)))
     }
 }
 

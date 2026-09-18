@@ -22,6 +22,7 @@ fn add_accumulates_all_fields() {
         cache_read_tokens: 4,
         cache_creation_tokens: 5,
         reasoning_tokens: 6,
+        ..Usage::default()
     };
     let b = a;
     let sum = a + b;

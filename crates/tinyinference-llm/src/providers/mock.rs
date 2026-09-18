@@ -248,6 +248,8 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
                     resolved_model: None,
                     continue_turn: None,
                     served_from_cache: false,
+                    correlation: None,
+                    resolved_route: None,
                 }
             }
 
@@ -292,7 +294,9 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
                     .map_err(|e| Error::Model(format!("MockModel lock poisoned: {e}")))?;
                 inner.call_count += 1;
             }
-            return Ok(Box::pin(futures::stream::iter(items.clone())));
+            return Ok(ModelStream::new(Box::pin(futures::stream::iter(
+                items.clone(),
+            ))));
         }
 
         let response = self.invoke(state, request).await?;
@@ -322,7 +326,7 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
         }
 
         items.push(ModelStreamItem::Completed(response));
-        Ok(Box::pin(futures::stream::iter(items)))
+        Ok(ModelStream::new(Box::pin(futures::stream::iter(items))))
     }
 }
 
@@ -350,6 +354,8 @@ impl MockModel {
             resolved_model: None,
             continue_turn: None,
             served_from_cache: false,
+            correlation: None,
+            resolved_route: None,
         }
     }
 }

@@ -13,7 +13,11 @@
 //! [`StreamAccumulator`] that folds a real
 //! [`ModelStream`] back into a single [`ModelResponse`].
 
+mod decorators;
 mod types;
+
+#[cfg(test)]
+mod migration_tests;
 
 use futures::StreamExt;
 use serde_json::Value;
@@ -23,6 +27,7 @@ use crate::message::{AssistantMessage, ContentBlock, Message};
 use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
+pub use decorators::*;
 pub use types::*;
 
 /// How a context-window pattern is matched against a model id.
@@ -495,6 +500,12 @@ impl ModelRequest {
         self.with_reasoning(ReasoningConfig::effort(effort))
     }
 
+    /// Sets the stable run/model-call correlation for this request.
+    pub fn with_correlation(mut self, correlation: ModelCallCorrelation) -> Self {
+        self.correlation = Some(correlation);
+        self
+    }
+
     /// Returns the ids of cacheable segments in declaration order, describing
     /// the stable prompt prefix middleware should preserve.
     pub fn cacheable_prefix_ids(&self) -> Vec<String> {
@@ -540,6 +551,8 @@ impl ModelResponse {
             resolved_model: None,
             continue_turn: None,
             served_from_cache: false,
+            correlation: None,
+            resolved_route: None,
         }
     }
 
@@ -559,6 +572,18 @@ impl ModelResponse {
     /// Attaches durable selection metadata supplied by a consuming runtime.
     pub fn with_resolved_model(mut self, resolved: ResolvedModel) -> Self {
         self.resolved_model = Some(resolved);
+        self
+    }
+
+    /// Attaches stable run/model-call correlation to the response.
+    pub fn with_correlation(mut self, correlation: ModelCallCorrelation) -> Self {
+        self.correlation = Some(correlation);
+        self
+    }
+
+    /// Attaches the concrete route that handled the response.
+    pub fn with_resolved_route(mut self, route: ResolvedModelRoute) -> Self {
+        self.resolved_route = Some(route);
         self
     }
 
@@ -770,6 +795,8 @@ impl StreamAccumulator {
             resolved_model: None,
             continue_turn: None,
             served_from_cache: false,
+            correlation: None,
+            resolved_route: None,
         })
     }
 }
