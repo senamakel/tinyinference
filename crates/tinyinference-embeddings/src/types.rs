@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -18,6 +19,72 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Result;
+
+/// Cooperative cancellation for an embedding request.
+///
+/// The flag is cloneable so a host can retain one handle while an embedding
+/// transport owns another. Providers with cancellable transports should check
+/// it while reading a response; the default request adapter checks before and
+/// after the provider call.
+#[derive(Clone, Debug, Default)]
+pub struct EmbeddingCancellation(Arc<AtomicBool>);
+
+impl EmbeddingCancellation {
+    /// Creates a non-cancelled request signal.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Requests cooperative cancellation.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Returns whether cancellation has been requested.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// Provider-neutral batched embedding request.
+#[derive(Clone, Debug)]
+pub struct EmbeddingRequest {
+    /// Texts to embed in the exact order the caller expects results.
+    pub inputs: Vec<String>,
+    /// Cooperative cancellation shared with the caller.
+    pub cancellation: EmbeddingCancellation,
+}
+
+impl EmbeddingRequest {
+    /// Creates a request with a fresh cancellation signal.
+    #[must_use]
+    pub fn new(inputs: Vec<String>) -> Self {
+        Self {
+            inputs,
+            cancellation: EmbeddingCancellation::new(),
+        }
+    }
+
+    /// Replaces the request cancellation signal.
+    #[must_use]
+    pub fn with_cancellation(mut self, cancellation: EmbeddingCancellation) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+}
+
+/// Validated embedding result for one batch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EmbeddingResponse {
+    /// One vector for each request input, in the same order.
+    pub vectors: Vec<Vec<f32>>,
+    /// Dimension shared by every returned vector.
+    pub dimensions: usize,
+    /// Provider-reported batch usage, when available.
+    pub usage: Option<EmbeddingUsage>,
+}
 
 // ── EmbeddingModel ────────────────────────────────────────────────────────────
 
@@ -85,6 +152,55 @@ pub trait EmbeddingModel: Send + Sync {
         texts: &[String],
     ) -> Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
         Ok((self.embed(texts).await?, None))
+    }
+
+    /// Embeds a validated batch with stable ordering, dimensionality, usage,
+    /// and cooperative cancellation.
+    ///
+    /// The default makes existing provider implementations conform at the
+    /// model boundary. Providers that can interrupt their transport should
+    /// override it and observe [`EmbeddingRequest::cancellation`] during I/O.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::Cancelled`] when cancellation is requested,
+    /// propagates provider failures, and returns
+    /// [`crate::Error::Validation`] when a provider violates the one-vector-per-
+    /// input or common-dimension contract.
+    async fn embed_request(&self, request: EmbeddingRequest) -> Result<EmbeddingResponse> {
+        if request.cancellation.is_cancelled() {
+            return Err(crate::Error::Cancelled);
+        }
+        let (vectors, usage) = self.embed_with_usage(&request.inputs).await?;
+        if request.cancellation.is_cancelled() {
+            return Err(crate::Error::Cancelled);
+        }
+        if vectors.len() != request.inputs.len() {
+            return Err(crate::Error::Validation(format!(
+                "embedding batch returned {} vectors for {} inputs",
+                vectors.len(),
+                request.inputs.len()
+            )));
+        }
+        let dimensions = self.dimensions();
+        let response_dimensions = vectors.first().map_or(dimensions, Vec::len);
+        if dimensions > 0 && response_dimensions != dimensions {
+            return Err(crate::Error::Validation(format!(
+                "embedding batch returned {response_dimensions} dimensions; model advertises {dimensions}"
+            )));
+        }
+        if vectors
+            .iter()
+            .any(|vector| vector.len() != response_dimensions)
+        {
+            return Err(crate::Error::Validation(
+                "embedding batch returned inconsistent vector dimensions".to_string(),
+            ));
+        }
+        Ok(EmbeddingResponse {
+            vectors,
+            dimensions: response_dimensions,
+            usage,
+        })
     }
 
     /// Embeds a retrieval query. Asymmetric providers can override this;
