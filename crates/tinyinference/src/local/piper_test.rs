@@ -87,6 +87,21 @@ fn decode_voice_id_falls_back_for_garbage() {
 }
 
 #[test]
+fn voice_paths_reject_path_traversal_and_absolute_paths() {
+    let (_tmp, install) = temp_install();
+    for unsafe_id in [
+        "../escape",
+        "..\\escape",
+        "/tmp/escape",
+        "C:\\escape",
+        "a/b",
+    ] {
+        assert!(install.voice_paths(unsafe_id).is_none(), "{unsafe_id}");
+    }
+    assert!(install.voice_paths(DEFAULT_PIPER_VOICE).is_some());
+}
+
+#[test]
 fn voice_download_urls_anchor_on_hf_bucket() {
     let (onnx, json) = voice_download_urls("en_US-lessac-medium");
     assert!(onnx.starts_with("https://huggingface.co/rhasspy/piper-voices/resolve/main/"));
@@ -140,6 +155,24 @@ fn status_reports_missing_for_fresh_workspace() {
     let (_tmp, install) = temp_install();
     wipe_install_dir(&install);
     let snapshot = status(&install, DEFAULT_PIPER_VOICE);
+    assert_eq!(snapshot.state, VoiceInstallState::Missing);
+}
+
+#[test]
+fn installed_status_is_reconciled_for_each_root_and_voice() {
+    let _g = shared_install_lock();
+    reset_status(ENGINE_PIPER);
+    write_status(VoiceInstallStatus {
+        engine: ENGINE_PIPER.to_string(),
+        state: VoiceInstallState::Installed,
+        progress: Some(100),
+        downloaded_bytes: None,
+        total_bytes: None,
+        stage: Some("different installation".to_string()),
+        error_detail: None,
+    });
+    let (_tmp, install) = temp_install();
+    let snapshot = status(&install, "de_DE-thorsten-high");
     assert_eq!(snapshot.state, VoiceInstallState::Missing);
 }
 

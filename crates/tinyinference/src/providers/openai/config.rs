@@ -54,6 +54,11 @@ impl std::fmt::Debug for OpenAiConfig<'_> {
             .iter()
             .map(|(name, _)| name)
             .collect::<Vec<_>>();
+        let query_parameter_names = self
+            .extra_query_params
+            .iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
         formatter
             .debug_struct("OpenAiConfig")
             .field("provider_name", &self.provider_name)
@@ -75,7 +80,7 @@ impl std::fmt::Debug for OpenAiConfig<'_> {
                 "responses_omit_max_output_tokens",
                 &self.responses_omit_max_output_tokens,
             )
-            .field("extra_query_params", &self.extra_query_params)
+            .field("extra_query_parameter_names", &query_parameter_names)
             .field("user_agent", &self.user_agent)
             .field("explicit_cache_control", &self.explicit_cache_control)
             .finish_non_exhaustive()

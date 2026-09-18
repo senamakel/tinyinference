@@ -35,6 +35,15 @@ fn kind_from_str_loose_accepts_aliases() {
 
 #[test]
 fn kind_from_provider_string_parses_prefixes() {
+    for (provider, expected) in [
+        ("lmstudio", LocalProviderKind::LmStudio),
+        ("mlx", LocalProviderKind::Mlx),
+        ("omlx", LocalProviderKind::Omlx),
+        ("local-openai", LocalProviderKind::LocalOpenai),
+    ] {
+        assert_eq!(kind_from_provider_string(provider), Some(expected));
+        assert!(is_local_provider_string(provider));
+    }
     assert_eq!(
         kind_from_provider_string("ollama:qwen3:14b"),
         Some(LocalProviderKind::Ollama)

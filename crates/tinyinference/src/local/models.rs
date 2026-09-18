@@ -9,7 +9,11 @@
 //! `effective_*` helpers still enforce the MVP tier restriction for
 //! OpenHuman-managed Ollama assets.
 
-use super::provider::{LocalAiProvider, provider_from_name};
+use super::profile::{LocalProviderKind, kind_from_provider_string};
+
+fn is_user_managed_runtime(provider: &str) -> bool {
+    kind_from_provider_string(provider).is_some_and(|kind| kind != LocalProviderKind::Ollama)
+}
 
 /// Host configuration fields needed to resolve local inference model IDs.
 ///
@@ -180,11 +184,10 @@ fn enforce_mvp_embedding_allowlist(resolved: &str) -> String {
 
 /// Resolve the effective local chat model, enforcing managed-runtime limits.
 pub fn effective_chat_model_id(config: &impl LocalModelConfig) -> String {
-    let provider = provider_from_name(config.local_provider_name());
-    if provider == LocalAiProvider::LmStudio {
+    if is_user_managed_runtime(config.local_provider_name()) {
         let model_id = raw_chat_model_id(config);
         tracing::debug!(
-            provider = provider.as_str(),
+            provider = config.local_provider_name(),
             has_model = !model_id.is_empty(),
             "[local_ai] effective_chat_model_id: using provider-managed model id"
         );
@@ -317,16 +320,16 @@ pub fn effective_embedding_model_id(config: &impl LocalModelConfig) -> String {
     // exact served model instead of having it rewritten back to `bge-m3`
     // (#3920). The allowlist remains in force for the managed Ollama path
     // below, where the ids are OpenHuman-pulled assets.
-    if provider_from_name(config.local_provider_name()) == LocalAiProvider::LmStudio {
+    if is_user_managed_runtime(config.local_provider_name()) {
         if raw.is_empty() {
             tracing::debug!(
-                provider = LocalAiProvider::LmStudio.as_str(),
+                provider = config.local_provider_name(),
                 "[local_ai] effective_embedding_model_id: no LM Studio embedding model configured"
             );
             return String::new();
         }
         tracing::debug!(
-            provider = LocalAiProvider::LmStudio.as_str(),
+            provider = config.local_provider_name(),
             "[local_ai] effective_embedding_model_id: using provider-managed embedding id"
         );
         return raw.to_string();

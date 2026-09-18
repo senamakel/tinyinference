@@ -220,22 +220,10 @@ pub fn profile_for_kind(kind: LocalProviderKind) -> &'static LocalProviderProfil
 /// Returns `None` for cloud/openhuman/unknown providers.
 pub fn kind_from_provider_string(provider: &str) -> Option<LocalProviderKind> {
     let p = provider.trim().to_ascii_lowercase();
-    if p.starts_with("ollama:") || p == "ollama" {
-        Some(LocalProviderKind::Ollama)
-    } else if p.starts_with("lmstudio:")
-        || p.starts_with("lm-studio:")
-        || p.starts_with("lm_studio:")
-    {
-        Some(LocalProviderKind::LmStudio)
-    } else if p.starts_with("mlx:") {
-        Some(LocalProviderKind::Mlx)
-    } else if p.starts_with("omlx:") {
-        Some(LocalProviderKind::Omlx)
-    } else if p.starts_with("local-openai:") || p.starts_with("local_openai:") {
-        Some(LocalProviderKind::LocalOpenai)
-    } else {
-        None
-    }
+    LocalProviderKind::from_str_loose(&p).or_else(|| {
+        p.split_once(':')
+            .and_then(|(prefix, _)| LocalProviderKind::from_str_loose(prefix))
+    })
 }
 
 /// Returns `true` when the provider string resolves to any local provider.

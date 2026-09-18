@@ -1,6 +1,5 @@
-//! Provider-neutral error classification and fallback diagnostics.
+//! Provider-neutral error classification.
 
 mod billing;
-pub mod fallback;
 
 pub use billing::is_budget_exhausted_message;

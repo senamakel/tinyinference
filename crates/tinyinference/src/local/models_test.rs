@@ -89,6 +89,21 @@ fn chat_model_allows_custom_ids_for_lm_studio() {
 }
 
 #[test]
+fn user_managed_local_runtimes_preserve_model_ids() {
+    for provider in ["mlx", "omlx", "local-openai"] {
+        let mut config = test_config();
+        config.local_ai.provider = provider.to_string();
+        config.local_ai.chat_model_id = "publisher/custom-chat".to_string();
+        config.local_ai.embedding_model_id = "publisher/custom-embed".to_string();
+        assert_eq!(effective_chat_model_id(&config), "publisher/custom-chat");
+        assert_eq!(
+            effective_embedding_model_id(&config),
+            "publisher/custom-embed"
+        );
+    }
+}
+
+#[test]
 fn lm_studio_chat_model_returns_empty_when_no_model_configured() {
     // LM Studio has no sensible Ollama-branded default — an empty model ID
     // surfaces the missing-model warning in diagnostics / status rather than

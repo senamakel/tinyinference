@@ -37,7 +37,7 @@ impl PiperInstall {
     /// Returns the model and JSON sidecar paths for a voice identifier.
     pub fn voice_paths(&self, voice_id: &str) -> Option<(PathBuf, PathBuf)> {
         let trimmed = voice_id.trim();
-        if trimmed.is_empty() {
+        if !voice_id_is_safe(trimmed) {
             return None;
         }
         let base = self.root.join("voices").join(trimmed);
@@ -56,6 +56,16 @@ impl PiperInstall {
             self.root.join("bin").join(binary),
         ]
     }
+}
+
+fn voice_id_is_safe(voice_id: &str) -> bool {
+    !voice_id.is_empty()
+        && voice_id != "."
+        && voice_id != ".."
+        && !voice_id.contains("..")
+        && voice_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
 }
 
 /// Default voice identifier shipped with the installer.
@@ -217,11 +227,13 @@ fn decode_voice_id(voice_id: &str) -> (String, String, String, String) {
 pub fn status(install: &PiperInstall, voice_id: &str) -> VoiceInstallStatus {
     let mut snapshot = read_status(ENGINE_PIPER);
     let configured_voice = voice_id.trim_end_matches(".onnx");
-    if matches!(snapshot.state, VoiceInstallState::Missing)
-        && installed_artifacts_ok(install, configured_voice)
-    {
+    if installed_artifacts_ok(install, configured_voice) {
         snapshot.state = VoiceInstallState::Installed;
         snapshot.stage = Some("binary and voice present".to_string());
+    } else if matches!(snapshot.state, VoiceInstallState::Installed) {
+        snapshot.state = VoiceInstallState::Missing;
+        snapshot.progress = None;
+        snapshot.stage = None;
     }
     snapshot
 }
@@ -272,6 +284,11 @@ pub async fn install_piper(
         .filter(|s| !s.is_empty())
         .unwrap_or(DEFAULT_PIPER_VOICE)
         .to_string();
+    if install.voice_paths(&voice).is_none() {
+        return Err(format!(
+            "{LOG_PREFIX} invalid voice id: expected a single ASCII filename component"
+        ));
+    }
     tracing::debug!(
         "{LOG_PREFIX} install requested voice={voice} force_reinstall={force_reinstall}"
     );

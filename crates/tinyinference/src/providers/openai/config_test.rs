@@ -58,6 +58,7 @@ fn debug_redacts_credentials_and_header_values() {
         "Authorization".to_string(),
         "Bearer header-secret".to_string(),
     )];
+    let query = vec![("api_key".to_string(), "query-secret".to_string())];
     let config = OpenAiConfig {
         provider_name: "test",
         endpoint: "https://example.com/v1",
@@ -73,13 +74,15 @@ fn debug_redacts_credentials_and_header_values() {
         default_provider_options: None,
         responses_api_primary: false,
         responses_omit_max_output_tokens: false,
-        extra_query_params: &[],
+        extra_query_params: &query,
         user_agent: None,
         explicit_cache_control: false,
     };
     let debug = format!("{config:?}");
     assert!(!debug.contains("api-secret"));
     assert!(!debug.contains("header-secret"));
+    assert!(!debug.contains("query-secret"));
     assert!(debug.contains("[REDACTED]"));
     assert!(debug.contains("Authorization"));
+    assert!(debug.contains("api_key"));
 }
