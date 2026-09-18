@@ -51,7 +51,11 @@
 //! # });
 //! ```
 
+pub mod catalog;
 mod error;
+pub mod factory;
+pub mod probe;
+pub mod served_models;
 mod types;
 
 pub use error::{Error, Result};
@@ -96,6 +100,130 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     dot / (norm_a.sqrt() * norm_b.sqrt())
+}
+
+/// Computes cosine similarity with `f64` accumulation for long vectors.
+///
+/// Returns zero for empty, mismatched, or zero-magnitude vectors and clamps
+/// floating-point drift to the mathematical `[-1.0, 1.0]` range.
+pub fn cosine_similarity_f64(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0_f64;
+    let mut norm_a = 0.0_f64;
+    let mut norm_b = 0.0_f64;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let x = f64::from(*x);
+        let y = f64::from(*y);
+        dot += x * y;
+        norm_a += x * x;
+        norm_b += y * y;
+    }
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom <= f64::EPSILON {
+        return 0.0;
+    }
+    (dot / denom).clamp(-1.0, 1.0)
+}
+
+/// Fold a vector into an existing running centroid.
+///
+/// A missing or dimensionally incompatible centroid is replaced with the new
+/// vector, keeping vectors from different embedding spaces out of one mean.
+#[must_use]
+pub fn incremental_mean_embedding(
+    current_centroid: &[f32],
+    new_embedding: &[f32],
+    count: usize,
+) -> Vec<f32> {
+    if current_centroid.is_empty() || current_centroid.len() != new_embedding.len() {
+        return new_embedding.to_vec();
+    }
+    current_centroid
+        .iter()
+        .zip(new_embedding.iter())
+        .map(|(current, new)| current + (new - current) / (count as f32 + 1.0))
+        .collect()
+}
+
+/// Estimate embedding input tokens from Unicode scalar count.
+///
+/// This intentionally uses the common four-characters-per-token heuristic;
+/// callers requiring billable usage should use provider-reported
+/// [`EmbeddingUsage`] instead.
+#[must_use]
+pub fn estimate_embedding_input_tokens(texts: &[String]) -> u64 {
+    let characters = texts.iter().map(|text| text.chars().count()).sum::<usize>();
+    (characters as u64).div_ceil(4)
+}
+
+/// Candidate for maximal marginal relevance selection.
+#[derive(Clone, Copy, Debug)]
+pub struct MmrCandidate<'a> {
+    /// Caller-defined index returned with the result.
+    pub index: usize,
+    /// Candidate vector.
+    pub embedding: &'a [f32],
+    /// Precomputed relevance to the query.
+    pub relevance: f64,
+}
+
+/// One maximal marginal relevance selection result.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MmrResult {
+    /// Caller-defined candidate index.
+    pub index: usize,
+    /// MMR score at the selection step.
+    pub score: f64,
+}
+
+/// Select candidates using maximal marginal relevance.
+///
+/// `lambda` is clamped to `[0.0, 1.0]`; higher values favor relevance and
+/// lower values favor diversity.
+#[must_use]
+pub fn mmr_select(candidates: &[MmrCandidate<'_>], limit: usize, lambda: f64) -> Vec<MmrResult> {
+    if candidates.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let lambda = lambda.clamp(0.0, 1.0);
+    let limit = limit.min(candidates.len());
+    let mut selected_embeddings: Vec<&[f32]> = Vec::with_capacity(limit);
+    let mut results = Vec::with_capacity(limit);
+    let mut available = vec![true; candidates.len()];
+
+    for _ in 0..limit {
+        let mut best_idx = None;
+        let mut best_mmr = f64::NEG_INFINITY;
+        for (index, candidate) in candidates.iter().enumerate() {
+            if !available[index] {
+                continue;
+            }
+            let max_similarity = if selected_embeddings.is_empty() {
+                0.0
+            } else {
+                selected_embeddings
+                    .iter()
+                    .map(|selected| cosine_similarity_f64(candidate.embedding, selected))
+                    .fold(f64::NEG_INFINITY, f64::max)
+            };
+            let score = lambda * candidate.relevance - (1.0 - lambda) * max_similarity;
+            if score > best_mmr {
+                best_mmr = score;
+                best_idx = Some(index);
+            }
+        }
+        let Some(index) = best_idx else { break };
+        available[index] = false;
+        selected_embeddings.push(candidates[index].embedding);
+        results.push(MmrResult {
+            index: candidates[index].index,
+            score: best_mmr,
+        });
+    }
+    results
 }
 
 // ── InMemoryVectorStore ───────────────────────────────────────────────────────
@@ -293,7 +421,7 @@ mod voyage;
 pub use noop::NoopEmbeddingModel;
 pub use ollama::{
     DEFAULT_OLLAMA_DIMENSIONS, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, OllamaEmbeddingModel,
-    RECOMMENDED_OLLAMA_CONTEXT_TOKENS,
+    RECOMMENDED_OLLAMA_CONTEXT_TOKENS, known_ollama_embedding_dimensions,
 };
 pub use openai::{MODELS_SUPPORTING_DIMENSIONS, OpenAiEmbeddingModel, model_supports_dimensions};
 pub use rate_limit::{DEFAULT_REQUESTS_PER_MINUTE, acquire, rate_limit, set_rate_limit};

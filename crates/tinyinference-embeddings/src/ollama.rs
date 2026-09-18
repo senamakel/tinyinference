@@ -19,6 +19,23 @@ pub const DEFAULT_OLLAMA_DIMENSIONS: usize = 1024;
 /// Context and batch window recommended for long-document embedding models.
 pub const RECOMMENDED_OLLAMA_CONTEXT_TOKENS: u32 = 8192;
 
+/// Return the known native width of a common Ollama embedding model.
+///
+/// Unknown or user-managed models return `None` so callers can discover the
+/// width from the first response instead of enforcing an incorrect guess.
+pub fn known_ollama_embedding_dimensions(model_id: &str) -> Option<usize> {
+    let normalized = model_id.trim().to_ascii_lowercase();
+    if normalized.starts_with("all-minilm") {
+        Some(384)
+    } else if normalized.contains("bge-m3") || normalized.starts_with("mxbai-embed-large") {
+        Some(DEFAULT_OLLAMA_DIMENSIONS)
+    } else if normalized.starts_with("nomic-embed-text") {
+        Some(768)
+    } else {
+        None
+    }
+}
+
 /// Client for Ollama's native `/api/embed` endpoint.
 #[derive(Debug)]
 pub struct OllamaEmbeddingModel {

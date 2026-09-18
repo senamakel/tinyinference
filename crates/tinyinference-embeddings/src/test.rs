@@ -384,6 +384,75 @@ fn embedding_identity_signature_is_stable() {
     );
 }
 
+#[test]
+fn known_ollama_widths_are_resolved_without_guessing_unknown_models() {
+    assert_eq!(known_ollama_embedding_dimensions("bge-m3"), Some(1024));
+    assert_eq!(
+        known_ollama_embedding_dimensions("all-minilm:latest"),
+        Some(384)
+    );
+    assert_eq!(
+        known_ollama_embedding_dimensions("nomic-embed-text"),
+        Some(768)
+    );
+    assert_eq!(
+        known_ollama_embedding_dimensions("user-managed-model"),
+        None
+    );
+}
+
+#[test]
+fn mmr_preserves_negative_similarity_as_diversity() {
+    let anchor = [1.0, 0.0];
+    let orthogonal = [0.0, 1.0];
+    let anti_correlated = [-1.0, 0.0];
+    let candidates = [
+        MmrCandidate {
+            index: 0,
+            embedding: &anchor,
+            relevance: 1.0,
+        },
+        MmrCandidate {
+            index: 1,
+            embedding: &orthogonal,
+            relevance: 0.5,
+        },
+        MmrCandidate {
+            index: 2,
+            embedding: &anti_correlated,
+            relevance: 0.5,
+        },
+    ];
+    let picked = mmr_select(&candidates, 2, 0.5);
+    assert_eq!(
+        picked.iter().map(|item| item.index).collect::<Vec<_>>(),
+        [0, 2]
+    );
+}
+
+#[test]
+fn incremental_mean_replaces_an_incompatible_centroid() {
+    assert_eq!(incremental_mean_embedding(&[], &[1.0, 2.0], 0), [1.0, 2.0]);
+    assert_eq!(
+        incremental_mean_embedding(&[1.0], &[1.0, 2.0], 3),
+        [1.0, 2.0]
+    );
+    assert_eq!(
+        incremental_mean_embedding(&[0.0, 0.0], &[1.0, 1.0], 1),
+        [0.5, 0.5]
+    );
+}
+
+#[test]
+fn embedding_token_estimate_rounds_up_across_the_batch() {
+    assert_eq!(estimate_embedding_input_tokens(&[]), 0);
+    assert_eq!(estimate_embedding_input_tokens(&["hello".into()]), 2);
+    assert_eq!(
+        estimate_embedding_input_tokens(&["abc".into(), "defgh".into()]),
+        2
+    );
+}
+
 #[tokio::test]
 async fn voyage_and_noop_identity_match_host_contract() {
     let voyage = VoyageEmbeddingModel::new("test-key");
