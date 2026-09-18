@@ -17,17 +17,30 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::watch;
 
 use crate::Result;
 
 /// Cooperative cancellation for an embedding request.
 ///
-/// The flag is cloneable so a host can retain one handle while an embedding
-/// transport owns another. Providers with cancellable transports should check
-/// it while reading a response; the default request adapter checks before and
-/// after the provider call.
-#[derive(Clone, Debug, Default)]
-pub struct EmbeddingCancellation(Arc<AtomicBool>);
+/// The signal is cloneable so a host can retain one handle while an embedding
+/// request owns another. The common request adapter races every provider future
+/// against this signal and drops an active transport on cancellation.
+#[derive(Clone, Debug)]
+pub struct EmbeddingCancellation {
+    cancelled: Arc<AtomicBool>,
+    signal: watch::Sender<bool>,
+}
+
+impl Default for EmbeddingCancellation {
+    fn default() -> Self {
+        let (signal, _) = watch::channel(false);
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            signal,
+        }
+    }
+}
 
 impl EmbeddingCancellation {
     /// Creates a non-cancelled request signal.
@@ -38,13 +51,26 @@ impl EmbeddingCancellation {
 
     /// Requests cooperative cancellation.
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.cancelled.store(true, Ordering::Release);
+        self.signal.send_replace(true);
     }
 
     /// Returns whether cancellation has been requested.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        let mut receiver = self.signal.subscribe();
+        while !*receiver.borrow_and_update() {
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        }
     }
 }
 
@@ -157,9 +183,11 @@ pub trait EmbeddingModel: Send + Sync {
     /// Embeds a validated batch with stable ordering, dimensionality, usage,
     /// and cooperative cancellation.
     ///
-    /// The default makes existing provider implementations conform at the
-    /// model boundary. Providers that can interrupt their transport should
-    /// override it and observe [`EmbeddingRequest::cancellation`] during I/O.
+    /// The default races every provider operation against cancellation at the
+    /// common model boundary. Cancelling drops the in-flight provider future;
+    /// this interrupts Reqwest transports and any provider future that releases
+    /// its resources on drop, without requiring each adapter to duplicate the
+    /// cancellation mechanism.
     ///
     /// # Errors
     /// Returns [`crate::Error::Cancelled`] when cancellation is requested,
@@ -170,7 +198,11 @@ pub trait EmbeddingModel: Send + Sync {
         if request.cancellation.is_cancelled() {
             return Err(crate::Error::Cancelled);
         }
-        let (vectors, usage) = self.embed_with_usage(&request.inputs).await?;
+        let cancellation = request.cancellation.clone();
+        let (vectors, usage) = tokio::select! {
+            result = self.embed_with_usage(&request.inputs) => result?,
+            () = cancellation.cancelled() => return Err(crate::Error::Cancelled),
+        };
         if request.cancellation.is_cancelled() {
             return Err(crate::Error::Cancelled);
         }

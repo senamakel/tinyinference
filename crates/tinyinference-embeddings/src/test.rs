@@ -1,7 +1,8 @@
 //! Unit tests for the embeddings + retrieval module.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde_json::json;
 
@@ -75,6 +76,46 @@ impl EmbeddingModel for WrongDimensionsEmbeddingModel {
 
 struct UsageEmbeddingModel;
 
+struct SlowEmbeddingModel {
+    started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    dropped: Arc<AtomicBool>,
+}
+
+struct InFlightEmbedding(Arc<AtomicBool>);
+
+impl Drop for InFlightEmbedding {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+#[async_trait::async_trait]
+impl EmbeddingModel for SlowEmbeddingModel {
+    fn name(&self) -> &str {
+        "slow"
+    }
+
+    fn model_id(&self) -> &str {
+        "slow"
+    }
+
+    async fn embed(&self, _texts: &[String]) -> crate::Result<Vec<Vec<f32>>> {
+        let _in_flight = InFlightEmbedding(self.dropped.clone());
+        self.started
+            .lock()
+            .unwrap()
+            .take()
+            .expect("one slow embedding invocation")
+            .send(())
+            .expect("test waits for the invocation to start");
+        std::future::pending::<crate::Result<Vec<Vec<f32>>>>().await
+    }
+
+    fn dimensions(&self) -> usize {
+        2
+    }
+}
+
 #[async_trait::async_trait]
 impl EmbeddingModel for UsageEmbeddingModel {
     fn name(&self) -> &str {
@@ -144,6 +185,29 @@ async fn embedding_request_rejects_wrong_batch_count_and_dimensions() {
         .await
         .unwrap_err();
     assert!(matches!(dimension_error, crate::Error::Validation(_)));
+}
+
+#[tokio::test]
+async fn embedding_request_cancellation_drops_an_in_flight_provider_operation() {
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let model = Arc::new(SlowEmbeddingModel {
+        started: Mutex::new(Some(started_tx)),
+        dropped: dropped.clone(),
+    });
+    let cancellation = EmbeddingCancellation::new();
+    let request =
+        EmbeddingRequest::new(vec!["slow".to_string()]).with_cancellation(cancellation.clone());
+    let task = tokio::spawn({
+        let model = model.clone();
+        async move { model.embed_request(request).await }
+    });
+
+    started_rx.await.expect("provider operation starts");
+    cancellation.cancel();
+    let error = task.await.unwrap().unwrap_err();
+    assert!(matches!(error, crate::Error::Cancelled));
+    assert!(dropped.load(Ordering::Acquire));
 }
 
 #[test]

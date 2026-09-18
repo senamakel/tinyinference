@@ -322,7 +322,8 @@ fn observation_for_response(
             usage: response.usage,
         };
     }
-    if let (Some(requested_route), Some(resolved_route)) = (request.model.clone(), route.clone())
+    if let (Some(requested_route), Some(resolved_route)) =
+        (request.requested_route.clone(), route.clone())
         && requested_route != resolved_route.route
     {
         return ModelCallObservation::Fallback {

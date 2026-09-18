@@ -386,6 +386,12 @@ impl ModelRequest {
         self
     }
 
+    /// Sets the host route requested for this call.
+    pub fn with_requested_route(mut self, route: impl Into<String>) -> Self {
+        self.requested_route = Some(route.into());
+        self
+    }
+
     /// Adds an uninterpreted runtime model-selection hint.
     pub fn with_model_hint(mut self, hint: ModelHint) -> Self {
         self.model_hints.push(hint);
@@ -578,6 +584,15 @@ impl ModelResponse {
     /// Attaches stable run/model-call correlation to the response.
     pub fn with_correlation(mut self, correlation: ModelCallCorrelation) -> Self {
         self.correlation = Some(correlation);
+        self
+    }
+
+    /// Inherits request correlation without replacing provider-populated
+    /// response metadata.
+    pub fn inherit_correlation(mut self, correlation: Option<ModelCallCorrelation>) -> Self {
+        if self.correlation.is_none() {
+            self.correlation = correlation;
+        }
         self
     }
 

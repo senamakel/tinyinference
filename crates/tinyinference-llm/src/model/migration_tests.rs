@@ -1,6 +1,7 @@
 //! Migration-contract tests for provider-neutral model boundary metadata.
 
 use super::*;
+use crate::providers::MockModel;
 use crate::usage::ChargedAmount;
 use std::sync::{Arc, Mutex};
 
@@ -77,6 +78,43 @@ fn request_correlation_and_resolved_route_survive_response_serialization() {
         serde_json::from_value(serde_json::to_value(response).unwrap()).unwrap();
     assert_eq!(decoded.correlation.as_ref(), Some(&correlation));
     assert_eq!(decoded.resolved_route.as_ref(), Some(&route));
+}
+
+#[tokio::test]
+async fn direct_provider_propagates_request_correlation_to_sync_and_stream_results() {
+    let model = MockModel::constant("ok");
+    let correlation = ModelCallCorrelation::new("run-direct", "call-direct");
+    let request = ModelRequest::default().with_correlation(correlation.clone());
+
+    let response = model.invoke(&(), request.clone()).await.unwrap();
+    assert_eq!(response.correlation.as_ref(), Some(&correlation));
+
+    let stream = model.stream(&(), request).await.unwrap();
+    assert_eq!(stream.metadata().correlation.as_ref(), Some(&correlation));
+    let items = stream.collect::<Vec<_>>().await;
+    let Some(ModelStreamItem::Completed(response)) = items.last() else {
+        panic!("mock stream must complete");
+    };
+    assert_eq!(response.correlation.as_ref(), Some(&correlation));
+}
+
+#[tokio::test]
+async fn default_chat_model_stream_propagates_request_correlation_to_terminal_response() {
+    let model = RecordingModel::new(ModelResponse::assistant("ok"));
+    let correlation = ModelCallCorrelation::new("run-default", "call-default");
+    let stream = model
+        .stream(
+            &(),
+            ModelRequest::default().with_correlation(correlation.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stream.metadata().correlation.as_ref(), Some(&correlation));
+    let items = stream.collect::<Vec<_>>().await;
+    let Some(ModelStreamItem::Completed(response)) = items.last() else {
+        panic!("default stream must complete");
+    };
+    assert_eq!(response.correlation.as_ref(), Some(&correlation));
 }
 
 #[tokio::test]
@@ -196,7 +234,29 @@ async fn observer_reports_each_terminal_outcome_once() {
         observer.clone(),
     );
     fallback
-        .invoke(&(), ModelRequest::default().with_model("primary-route"))
+        .invoke(
+            &(),
+            ModelRequest::default()
+                .with_model("provider-model-id")
+                .with_requested_route("primary-route"),
+        )
+        .await
+        .unwrap();
+
+    let same_route = ObservingModel::new(
+        Arc::new(RouteRecordingModel::new(
+            Arc::new(RecordingModel::new(ModelResponse::assistant("same route"))),
+            ResolvedModelRoute::new("mock", "other-provider-model", "same-route"),
+        )),
+        observer.clone(),
+    );
+    same_route
+        .invoke(
+            &(),
+            ModelRequest::default()
+                .with_model("different-provider-model-id")
+                .with_requested_route("same-route"),
+        )
         .await
         .unwrap();
 
@@ -218,7 +278,11 @@ async fn observer_reports_each_terminal_outcome_once() {
     ));
     assert!(matches!(
         observations[3],
+        ModelCallObservation::Succeeded { .. }
+    ));
+    assert!(matches!(
+        observations[4],
         ModelCallObservation::Failed { .. }
     ));
-    assert_eq!(observations.len(), 4);
+    assert_eq!(observations.len(), 5);
 }

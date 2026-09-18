@@ -439,6 +439,13 @@ pub struct ModelRequest {
     /// Model id or registry alias override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Host route requested for this call, distinct from a provider model id.
+    ///
+    /// This is observability metadata used to identify an actual fallback. It
+    /// must not be inferred from [`Self::model`], because provider model ids
+    /// and host route names occupy different namespaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_route: Option<String>,
     /// Ordered runtime model-selection hints carried without interpretation.
     #[serde(default)]
     pub model_hints: Vec<ModelHint>,
@@ -729,7 +736,16 @@ impl ModelStream {
     #[must_use]
     pub fn with_correlation(mut self, correlation: ModelCallCorrelation) -> Self {
         self.metadata.correlation = Some(correlation);
-        self
+        let correlation = self.metadata.correlation.clone();
+        self.map_items(move |item| match item {
+            ModelStreamItem::Completed(mut response) => {
+                if response.correlation.is_none() {
+                    response.correlation.clone_from(&correlation);
+                }
+                ModelStreamItem::Completed(response)
+            }
+            other => other,
+        })
     }
 
     /// Sets the concrete provider/model/route identity for this stream.
@@ -818,6 +834,7 @@ pub trait ChatModel<State: Send + Sync>: Send + Sync {
     /// to a streaming endpoint (for example the OpenAI adapter) override this to
     /// emit incremental deltas as bytes arrive.
     async fn stream(&self, state: &State, request: ModelRequest) -> Result<ModelStream> {
+        let correlation = request.correlation.clone();
         let response = self.invoke(state, request).await?;
         let delta = MessageDelta {
             text: response.text(),
@@ -829,6 +846,10 @@ pub trait ChatModel<State: Send + Sync>: Send + Sync {
             ModelStreamItem::MessageDelta(delta),
             ModelStreamItem::Completed(response),
         ];
-        Ok(ModelStream::new(Box::pin(futures::stream::iter(items))))
+        let stream = ModelStream::new(Box::pin(futures::stream::iter(items)));
+        Ok(match correlation {
+            Some(correlation) => stream.with_correlation(correlation),
+            None => stream,
+        })
     }
 }
