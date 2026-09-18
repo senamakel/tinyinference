@@ -1,0 +1,26 @@
+[package]
+name = "tinyinference-voice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Speech inference, Piper synthesis, and streaming-audio helpers for TinyInference."
+documentation = "https://docs.rs/tinyinference-voice"
+readme = "../../README.md"
+keywords = ["speech", "tts", "stt", "inference"]
+categories = ["api-bindings", "asynchronous"]
+
+[dependencies]
+base64 = "0.22"
+log = "0.4"
+reqwest = { workspace = true, features = ["multipart"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tinyinference-core = { version = "0.2.1", path = "../tinyinference-core" }
+tinyinference-local = { version = "0.2.1", path = "../tinyinference-local" }
+tokio = { workspace = true, features = ["fs", "io-util"] }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

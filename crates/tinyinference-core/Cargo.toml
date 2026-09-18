@@ -1,0 +1,23 @@
+[package]
+name = "tinyinference-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared protocol-agnostic infrastructure for TinyInference crates."
+documentation = "https://docs.rs/tinyinference-core"
+readme = "../../README.md"
+keywords = ["inference", "retry", "security"]
+categories = ["development-tools"]
+
+[dependencies]
+anyhow = { workspace = true }
+httpdate = { workspace = true }
+url = { workspace = true }
+
+[features]
+default = []
+
+[lints]
+workspace = true

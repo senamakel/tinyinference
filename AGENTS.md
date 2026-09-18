@@ -9,10 +9,13 @@ policy belong in consuming runtimes such as TinyAgents.
 
 ## Structure
 
-The public crate is `crates/tinyinference`. Keep feature areas in module
-directories with `mod.rs`, `types.rs`, and `test.rs` where the area is large.
-Centralize deliberate exports in `src/lib.rs`. Keep provider wire types private
-unless callers must construct them.
+The public crates are `crates/tinyinference-core` and
+`crates/tinyinference-local`. Core owns provider-neutral inference and hosted
+transports; local depends on core and owns hardware, process, filesystem, and
+local-runtime integrations. Keep feature areas in module directories with
+`mod.rs`, `types.rs`, and `test.rs` where the area is large. Centralize
+deliberate exports in each `src/lib.rs`. Keep provider wire types private unless
+callers must construct them.
 
 ## Workflow
 

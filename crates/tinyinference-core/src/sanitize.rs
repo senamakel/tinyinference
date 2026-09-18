@@ -1,0 +1,144 @@
+//! Secret scrubbing and bounded provider-error formatting.
+
+/// Maximum number of characters retained from a provider API error.
+pub const MAX_API_ERROR_CHARS: usize = 200;
+const TRANSPORT_ERROR_MAX_CHARS: usize = 1200;
+
+/// Redact credentials carried by a URL while retaining its routing shape.
+///
+/// Userinfo and fragments are removed. Query parameter names remain visible for
+/// diagnostics, but every value is replaced so presigned URLs and API keys can
+/// never reach logs or error strings.
+pub fn redact_url(input: &str) -> String {
+    let Ok(mut url) = url::Url::parse(input.trim()) else {
+        return "[REDACTED INVALID URL]".to_string();
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_fragment(None);
+    let names = url
+        .query_pairs()
+        .map(|(name, _)| name.into_owned())
+        .collect::<Vec<_>>();
+    url.set_query(None);
+    if !names.is_empty() {
+        let mut query = url.query_pairs_mut();
+        for name in names {
+            query.append_pair(&name, "[REDACTED]");
+        }
+    }
+    url.to_string()
+}
+
+fn truncate_with_suffix(input: &str, max_chars: usize, suffix: &str) -> String {
+    if input.chars().count() <= max_chars {
+        return input.to_string();
+    }
+    let suffix_chars = suffix.chars().count();
+    if suffix_chars >= max_chars {
+        return suffix.chars().take(max_chars).collect();
+    }
+    let mut truncated: String = input.chars().take(max_chars - suffix_chars).collect();
+    truncated.push_str(suffix);
+    truncated
+}
+
+fn is_secret_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')
+}
+
+fn token_end(input: &str, from: usize) -> usize {
+    let mut end = from;
+    for (i, c) in input[from..].char_indices() {
+        if is_secret_char(c) {
+            end = from + i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+/// Scrub known secret-like token prefixes from provider error strings.
+pub fn scrub_secret_patterns(input: &str) -> String {
+    const PREFIXES: [&str; 7] = [
+        "sk-",
+        "xoxb-",
+        "xoxp-",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "github_pat_",
+    ];
+
+    let mut scrubbed = input.to_string();
+
+    for prefix in PREFIXES {
+        let mut search_from = 0;
+        while let Some(rel) = scrubbed[search_from..].find(prefix) {
+            let start = search_from + rel;
+            let content_start = start + prefix.len();
+            let end = token_end(&scrubbed, content_start);
+
+            if end == content_start {
+                search_from = content_start;
+                continue;
+            }
+
+            scrubbed.replace_range(start..end, "[REDACTED]");
+            search_from = start + "[REDACTED]".len();
+        }
+    }
+
+    scrubbed
+}
+
+/// Sanitize API error text by scrubbing secrets and truncating length.
+pub fn sanitize_api_error(input: &str) -> String {
+    let scrubbed = scrub_secret_patterns(input);
+    truncate_with_suffix(&scrubbed, MAX_API_ERROR_CHARS, "...")
+}
+
+/// Full `source()` chain for connection / TLS failures (scrubbed, longer than API body snippets).
+pub fn format_error_chain(err: &dyn std::error::Error) -> String {
+    let mut parts: Vec<String> = vec![err.to_string()];
+    let mut src = std::error::Error::source(err);
+    while let Some(e) = src {
+        parts.push(e.to_string());
+        src = std::error::Error::source(e);
+    }
+    let joined = parts.join(" | ");
+    let scrubbed = scrub_secret_patterns(&joined);
+    truncate_with_suffix(&scrubbed, TRANSPORT_ERROR_MAX_CHARS, "…")
+}
+
+/// Cause chain from [`anyhow::Error`] (e.g. responses fallback), scrubbed and length-limited.
+pub fn format_anyhow_chain(err: &anyhow::Error) -> String {
+    let joined = err
+        .chain()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let scrubbed = scrub_secret_patterns(&joined);
+    truncate_with_suffix(&scrubbed, TRANSPORT_ERROR_MAX_CHARS, "…")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncation_limit_includes_the_suffix() {
+        let sanitized = sanitize_api_error(&"x".repeat(MAX_API_ERROR_CHARS + 50));
+        assert_eq!(sanitized.chars().count(), MAX_API_ERROR_CHARS);
+        assert!(sanitized.ends_with("..."));
+    }
+
+    #[test]
+    fn secret_scrubbing_preserves_unicode_boundaries() {
+        assert_eq!(
+            scrub_secret_patterns("é before sk-secret after 🚀"),
+            "é before [REDACTED] after 🚀"
+        );
+    }
+}
