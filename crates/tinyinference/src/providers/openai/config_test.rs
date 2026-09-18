@@ -61,7 +61,7 @@ fn debug_redacts_credentials_and_header_values() {
     let query = vec![("api_key".to_string(), "query-secret".to_string())];
     let config = OpenAiConfig {
         provider_name: "test",
-        endpoint: "https://example.com/v1",
+        endpoint: "https://endpoint-user:endpoint-pass@example.com/v1?token=endpoint-secret#fragment-secret",
         api_key: "api-secret",
         auth_style: AuthStyle::Bearer,
         model: "model",
@@ -82,6 +82,10 @@ fn debug_redacts_credentials_and_header_values() {
     assert!(!debug.contains("api-secret"));
     assert!(!debug.contains("header-secret"));
     assert!(!debug.contains("query-secret"));
+    assert!(!debug.contains("endpoint-user"));
+    assert!(!debug.contains("endpoint-pass"));
+    assert!(!debug.contains("endpoint-secret"));
+    assert!(!debug.contains("fragment-secret"));
     assert!(debug.contains("[REDACTED]"));
     assert!(debug.contains("Authorization"));
     assert!(debug.contains("api_key"));

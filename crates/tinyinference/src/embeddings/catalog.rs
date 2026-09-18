@@ -198,12 +198,9 @@ pub fn default_model_for(provider_slug: &str) -> Option<&'static EmbeddingModelP
 /// Returns `Some(reason)` when `model` is unmistakably **not** an embeddings
 /// model and must be rejected before it is persisted as the embeddings model.
 ///
-/// Conservative by design (zero false positives on real embedding ids): the
-/// only hard signal is the OpenRouter `:free` chat/reasoning tier suffix — no
-/// embeddings model is served under it, and a chat model id pasted into the
-/// free-text custom-model field is exactly how TAURI-RUST-9SK happened
-/// (`nvidia/nemotron-3-super-120b-a12b:free` saved as the embeddings model,
-/// then 400 "does not exist" on every memory re-embed — 2205 events).
+/// Conservative by design (zero false positives on real embedding ids). Only
+/// confirmed incompatible model IDs are rejected; suffixes such as `:free`
+/// cannot be used because OpenRouter serves valid embedding models under them.
 ///
 /// This is a source-gate for the persist paths that have **no** live verify
 /// probe (`config::ops::model::apply_memory_settings`); the Custom-provider
@@ -212,10 +209,12 @@ pub fn default_model_for(provider_slug: &str) -> Option<&'static EmbeddingModelP
 /// by the 400 "does not exist" classifier in `core::observability`. Kept
 /// deliberately tight: a false positive blocks a user's valid embeddings model.
 pub fn non_embedding_model_reason(model: &str) -> Option<&'static str> {
-    if model.trim().to_ascii_lowercase().ends_with(":free") {
+    const CONFIRMED_CHAT_ONLY: &[&str] = &["nvidia/nemotron-3-super-120b-a12b:free"];
+    let normalized = model.trim().to_ascii_lowercase();
+    if CONFIRMED_CHAT_ONLY.contains(&normalized.as_str()) {
         return Some(
-            "`:free` denotes an OpenRouter chat/reasoning tier, not an embeddings model — \
-             pick an embeddings-capable model in Settings → Memory",
+            "this is a chat/reasoning model, not an embeddings model — pick an \
+             embeddings-capable model in Settings → Memory",
         );
     }
     None

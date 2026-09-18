@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn detect_device_profile_returns_nonzero_hardware() {
-    let profile = detect_device_profile();
+    let profile = detect_device_profile_uncached_with_probe(|| None);
     assert!(profile.total_ram_bytes > 0, "RAM should be > 0");
     assert!(profile.cpu_count > 0, "CPU count should be > 0");
     assert!(!profile.os_name.is_empty(), "OS name should be non-empty");
@@ -75,24 +75,19 @@ fn detect_gpu_reports_no_gpu_on_intel_mac() {
 }
 
 #[test]
-fn detect_gpu_no_gpu_on_linux_without_nvidia() {
-    // Linux without nvidia-smi should report no GPU (or NVIDIA if nvidia-smi is present).
-    // Since we can't mock nvidia-smi here, we at least verify the function doesn't panic.
-    let (has, desc) = detect_gpu("AMD Ryzen 9", "Linux");
-    // On CI/dev machines without nvidia-smi, this should be (false, None).
-    // If nvidia-smi is present, it returns (true, Some("NVIDIA ...")), which is also fine.
-    if !has {
-        assert!(desc.is_none());
-    }
+fn detect_gpu_no_gpu_when_probe_is_absent() {
+    let (has, desc) = detect_gpu_with_probe("AMD Ryzen 9", "Linux", || None);
+    assert!(!has);
+    assert!(desc.is_none());
 }
 
 #[test]
-fn detect_gpu_windows_without_nvidia() {
-    let (has, desc) = detect_gpu("Intel Core i9", "Windows");
-    // Same as Linux: depends on nvidia-smi availability
-    if !has {
-        assert!(desc.is_none());
-    }
+fn detect_gpu_uses_injected_nvidia_probe() {
+    let (has, desc) = detect_gpu_with_probe("Intel Core i9", "Windows", || {
+        Some("NVIDIA Test GPU (CUDA)".to_string())
+    });
+    assert!(has);
+    assert_eq!(desc.as_deref(), Some("NVIDIA Test GPU (CUDA)"));
 }
 
 #[test]

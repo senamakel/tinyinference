@@ -49,6 +49,7 @@ pub struct OpenAiConfig<'a> {
 
 impl std::fmt::Debug for OpenAiConfig<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let endpoint = crate::sanitize::redact_url(self.endpoint);
         let header_names = self
             .extra_headers
             .iter()
@@ -62,7 +63,7 @@ impl std::fmt::Debug for OpenAiConfig<'_> {
         formatter
             .debug_struct("OpenAiConfig")
             .field("provider_name", &self.provider_name)
-            .field("endpoint", &self.endpoint)
+            .field("endpoint", &endpoint)
             .field("api_key", &"[REDACTED]")
             .field("auth_style", &self.auth_style)
             .field("model", &self.model)

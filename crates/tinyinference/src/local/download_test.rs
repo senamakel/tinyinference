@@ -202,78 +202,67 @@ async fn concurrent_install_slot_acquire_grants_exactly_one() {
 }
 
 #[tokio::test]
-async fn download_to_file_rejects_oversize_min_bytes() {
-    // 4xx-like guard: a non-existent host fails before we can write
-    // anything. Use a localhost port that nothing is listening on so
-    // the test is hermetic.
+async fn synthetic_stream_rejects_undersized_payload() {
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("never.bin");
-    let result = download_to_file(
-        "http://127.0.0.1:1/never",
-        &dest,
-        None,
-        10,
-        "[voice-install:test]",
+    let part = part_path(&dest);
+    let stream =
+        futures::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"tiny"))]);
+    let result = write_download_stream(
+        stream,
+        DownloadTarget {
+            total: Some(4),
+            part_path: &part,
+            dest: &dest,
+            expected_sha256: None,
+            min_bytes: 10,
+            log_prefix: "[voice-install:test]",
+        },
         |_, _| {},
     )
     .await;
-    assert!(result.is_err(), "expected network error on unused port");
-    // No `.part` should be left behind on a connection failure.
-    let part = part_path(&dest);
+    assert!(
+        matches!(result, Err(crate::Error::DownloadIntegrity(_))),
+        "expected typed integrity error"
+    );
     assert!(
         !part.exists(),
-        "no part file should remain after pre-stream failure"
+        "no part file should remain after validation failure"
     );
 }
 
 #[tokio::test]
-async fn download_to_file_streams_and_renames_atomically() {
-    // Spin up a one-shot in-process server with hyper via reqwest's
-    // test infrastructure isn't available here, so we stand up a tiny
-    // TCP listener that serves a fixed body. Keep the body small so
-    // the test stays fast.
-    use std::io::Write as _;
-    use std::net::TcpListener;
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
+async fn synthetic_stream_commits_validated_replacement() {
     let body = b"hello voice-install body";
-    let server = tokio::task::spawn_blocking(move || {
-        let (mut sock, _) = listener.accept().unwrap();
-        // Drain request bytes — we only need headers.
-        let mut buf = [0u8; 1024];
-        use std::io::Read as _;
-        let _ = sock.read(&mut buf);
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        sock.write_all(response.as_bytes()).unwrap();
-        sock.write_all(body).unwrap();
-        sock.flush().unwrap();
-    });
-
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("hello.bin");
-    let url = format!("http://{addr}/hello");
+    tokio::fs::write(&dest, b"previous valid artifact")
+        .await
+        .unwrap();
+    let part = part_path(&dest);
+    let stream = futures::stream::iter([
+        Ok::<_, std::io::Error>(bytes::Bytes::from_static(&body[..8])),
+        Ok(bytes::Bytes::from_static(&body[8..])),
+    ]);
     let mut last_progress = (0u64, None);
-    let result = download_to_file(
-        &url,
-        &dest,
-        None,
-        5,
-        "[voice-install:test]",
+    let result = write_download_stream(
+        stream,
+        DownloadTarget {
+            total: Some(body.len() as u64),
+            part_path: &part,
+            dest: &dest,
+            expected_sha256: None,
+            min_bytes: 5,
+            log_prefix: "[voice-install:test]",
+        },
         |downloaded, total| {
             last_progress = (downloaded, total);
         },
     )
     .await;
-    server.await.unwrap();
     assert!(result.is_ok(), "download failed: {result:?}");
     let on_disk = tokio::fs::read(&dest).await.unwrap();
     assert_eq!(on_disk.as_slice(), body, "wrong bytes landed on disk");
     assert!(last_progress.0 > 0, "progress callback should fire");
-    assert!(
-        !part_path(&dest).exists(),
-        "part file should be renamed away"
-    );
+    assert!(!part.exists(), "part file should be renamed away");
 }

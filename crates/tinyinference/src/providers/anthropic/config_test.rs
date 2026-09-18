@@ -32,7 +32,7 @@ fn builds_a_native_anthropic_model_with_the_configured_profile() {
 #[test]
 fn debug_redacts_api_key() {
     let config = AnthropicConfig {
-        endpoint: "https://api.anthropic.com/v1",
+        endpoint: "https://endpoint-user:endpoint-pass@api.anthropic.com/v1?token=query-secret#fragment-secret",
         api_key: "sk-ant-secret",
         model: "claude-sonnet-4-6",
         temperature_override: None,
@@ -40,5 +40,10 @@ fn debug_redacts_api_key() {
     };
     let debug = format!("{config:?}");
     assert!(!debug.contains("sk-ant-secret"));
+    assert!(!debug.contains("endpoint-user"));
+    assert!(!debug.contains("endpoint-pass"));
+    assert!(!debug.contains("query-secret"));
+    assert!(!debug.contains("fragment-secret"));
+    assert!(debug.contains("token"));
     assert!(debug.contains("[REDACTED]"));
 }

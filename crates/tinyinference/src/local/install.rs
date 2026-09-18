@@ -143,19 +143,23 @@ fn build_install_command(install_dir: &Path) -> Result<tokio::process::Command, 
             $installDir = $env:OPENHUMAN_OLLAMA_INSTALL_DIR
             New-Item -ItemType Directory -Path $installDir -Force | Out-Null
             $installerUrl = "https://ollama.com/download/OllamaSetup.exe"
-            $tempInstaller = Join-Path $env:TEMP "OllamaSetup.exe"
-            Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tempInstaller
-            # /SILENT (not /VERYSILENT) so Inno Setup's small progress dialog
-            # appears. The dialog is owned by the OS, not OpenHuman, so it
-            # survives the parent process crashing — giving the user a visible
-            # signal that an install is in flight even if OpenHuman dies.
-            $args = "/SILENT /NORESTART /SUPPRESSMSGBOXES /CURRENTUSER /DIR=""$installDir"""
-            $proc = Start-Process -FilePath $tempInstaller -ArgumentList $args -PassThru
-            $proc.WaitForExit()
-            if ($proc.ExitCode -ne 0) {
-                throw "Installation failed with exit code $($proc.ExitCode)"
+            $tempInstaller = Join-Path ([IO.Path]::GetTempPath()) ("OpenHuman-Ollama-{0}.exe" -f [Guid]::NewGuid())
+            try {
+                Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $tempInstaller
+                $signature = Get-AuthenticodeSignature -FilePath $tempInstaller
+                if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Ollama") {
+                    throw "Downloaded Ollama installer has an invalid or unexpected Authenticode signature"
+                }
+                # /SILENT (not /VERYSILENT) keeps the OS-owned progress dialog visible.
+                $args = "/SILENT /NORESTART /SUPPRESSMSGBOXES /CURRENTUSER /DIR=""$installDir"""
+                $proc = Start-Process -FilePath $tempInstaller -ArgumentList $args -PassThru
+                $proc.WaitForExit()
+                if ($proc.ExitCode -ne 0) {
+                    throw "Installation failed with exit code $($proc.ExitCode)"
+                }
+            } finally {
+                Remove-Item $tempInstaller -Force -ErrorAction SilentlyContinue
             }
-            Remove-Item $tempInstaller -Force -ErrorAction SilentlyContinue
             "#,
         ]);
         return Ok(cmd);
@@ -174,21 +178,34 @@ fn build_install_command(install_dir: &Path) -> Result<tokio::process::Command, 
             .arg(
                 r#"
                 set -eu
-                for tool in curl unzip mktemp rm cp chmod mkdir; do
+                for tool in curl unzip mktemp rm cp chmod mkdir mv; do
                   command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 1; }
                 done
                 dest="$OPENHUMAN_OLLAMA_INSTALL_DIR"
                 tmp_dir="$(mktemp -d)"
-                cleanup() { rm -rf "$tmp_dir"; }
+                stage="${dest}.installing.$$"
+                backup="${dest}.backup.$$"
+                cleanup() {
+                  rm -rf "$tmp_dir" "$stage"
+                  if [ -e "$backup" ] && [ ! -e "$dest" ]; then mv "$backup" "$dest"; fi
+                }
                 trap cleanup EXIT
                 archive="$tmp_dir/Ollama-darwin.zip"
+                rm -rf "$stage" "$backup"
                 echo ">>> Downloading Ollama for macOS into $dest" >&2
                 curl --fail --show-error --location --progress-bar -o "$archive" "https://ollama.com/download/Ollama-darwin.zip"
                 unzip -q "$archive" -d "$tmp_dir"
-                rm -rf "$dest"
-                mkdir -p "$dest"
-                cp -R "$tmp_dir/Ollama.app/Contents/Resources/." "$dest/"
-                chmod 755 "$dest/ollama"
+                mkdir -p "$stage"
+                cp -R "$tmp_dir/Ollama.app/Contents/Resources/." "$stage/"
+                chmod 755 "$stage/ollama"
+                test -x "$stage/ollama"
+                if [ -e "$dest" ]; then mv "$dest" "$backup"; fi
+                if mv "$stage" "$dest"; then
+                  rm -rf "$backup"
+                else
+                  if [ -e "$backup" ]; then mv "$backup" "$dest"; fi
+                  exit 1
+                fi
                 "#,
             );
         return Ok(cmd);
@@ -203,7 +220,7 @@ fn build_install_command(install_dir: &Path) -> Result<tokio::process::Command, 
             .arg(
                 r#"
                 set -eu
-                for tool in curl tar uname rm mkdir; do
+                for tool in curl tar uname rm mkdir mv; do
                   command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 1; }
                 done
                 arch="$(uname -m)"
@@ -213,16 +230,31 @@ fn build_install_command(install_dir: &Path) -> Result<tokio::process::Command, 
                   *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
                 esac
                 dest="$OPENHUMAN_OLLAMA_INSTALL_DIR"
+                stage="${dest}.installing.$$"
+                backup="${dest}.backup.$$"
+                cleanup() {
+                  rm -rf "$stage"
+                  if [ -e "$backup" ] && [ ! -e "$dest" ]; then mv "$backup" "$dest"; fi
+                }
+                trap cleanup EXIT
                 archive_url="https://ollama.com/download/ollama-linux-${arch}.tar.zst"
                 if ! command -v unzstd >/dev/null 2>&1; then
                   echo "missing required tool: unzstd (zstd package)" >&2
                   exit 1
                 fi
-                rm -rf "$dest"
-                mkdir -p "$dest"
+                rm -rf "$stage" "$backup"
+                mkdir -p "$stage"
                 echo ">>> Downloading Ollama for Linux into $dest" >&2
-                curl --fail --show-error --location --progress-bar "$archive_url" | tar --use-compress-program=unzstd -xf - -C "$dest"
-                chmod 755 "$dest/bin/ollama"
+                curl --fail --show-error --location --progress-bar "$archive_url" | tar --use-compress-program=unzstd -xf - -C "$stage"
+                chmod 755 "$stage/bin/ollama"
+                test -x "$stage/bin/ollama"
+                if [ -e "$dest" ]; then mv "$dest" "$backup"; fi
+                if mv "$stage" "$dest"; then
+                  rm -rf "$backup"
+                else
+                  if [ -e "$backup" ]; then mv "$backup" "$dest"; fi
+                  exit 1
+                fi
                 "#,
             );
         return Ok(cmd);

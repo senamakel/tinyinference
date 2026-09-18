@@ -4,6 +4,32 @@
 pub const MAX_API_ERROR_CHARS: usize = 200;
 const TRANSPORT_ERROR_MAX_CHARS: usize = 1200;
 
+/// Redact credentials carried by a URL while retaining its routing shape.
+///
+/// Userinfo and fragments are removed. Query parameter names remain visible for
+/// diagnostics, but every value is replaced so presigned URLs and API keys can
+/// never reach logs or error strings.
+pub fn redact_url(input: &str) -> String {
+    let Ok(mut url) = url::Url::parse(input.trim()) else {
+        return "[REDACTED INVALID URL]".to_string();
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_fragment(None);
+    let names = url
+        .query_pairs()
+        .map(|(name, _)| name.into_owned())
+        .collect::<Vec<_>>();
+    url.set_query(None);
+    if !names.is_empty() {
+        let mut query = url.query_pairs_mut();
+        for name in names {
+            query.append_pair(&name, "[REDACTED]");
+        }
+    }
+    url.to_string()
+}
+
 fn truncate_with_suffix(input: &str, max_chars: usize, suffix: &str) -> String {
     if input.chars().count() <= max_chars {
         return input.to_string();

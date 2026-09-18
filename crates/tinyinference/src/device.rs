@@ -47,6 +47,12 @@ pub fn detect_device_profile() -> DeviceProfile {
 }
 
 fn detect_device_profile_uncached() -> DeviceProfile {
+    detect_device_profile_uncached_with_probe(probe_nvidia_smi)
+}
+
+fn detect_device_profile_uncached_with_probe(
+    nvidia_probe: impl FnOnce() -> Option<String>,
+) -> DeviceProfile {
     let mut sys = System::new_all();
     sys.refresh_all();
 
@@ -61,7 +67,7 @@ fn detect_device_profile_uncached() -> DeviceProfile {
     let os_name = System::name().unwrap_or_else(|| "unknown".to_string());
     let os_version = System::os_version().unwrap_or_else(|| "unknown".to_string());
 
-    let (has_gpu, gpu_description) = detect_gpu(&cpu_brand, &os_name);
+    let (has_gpu, gpu_description) = detect_gpu_with_probe(&cpu_brand, &os_name, nvidia_probe);
 
     tracing::debug!(
         total_ram_bytes,
@@ -90,7 +96,16 @@ fn detect_device_profile_uncached() -> DeviceProfile {
 /// Apple Silicon always has a unified GPU (Metal). On Windows/Linux, we probe
 /// for NVIDIA GPUs via `nvidia-smi`. On other systems we conservatively report
 /// no GPU.
+#[cfg(test)]
 fn detect_gpu(cpu_brand: &str, os_name: &str) -> (bool, Option<String>) {
+    detect_gpu_with_probe(cpu_brand, os_name, probe_nvidia_smi)
+}
+
+fn detect_gpu_with_probe(
+    cpu_brand: &str,
+    os_name: &str,
+    nvidia_probe: impl FnOnce() -> Option<String>,
+) -> (bool, Option<String>) {
     let brand_lower = cpu_brand.to_ascii_lowercase();
     let os_lower = os_name.to_ascii_lowercase();
 
@@ -107,7 +122,7 @@ fn detect_gpu(cpu_brand: &str, os_name: &str) -> (bool, Option<String>) {
     }
 
     // Windows / Linux: probe for NVIDIA GPU via nvidia-smi.
-    if let Some(desc) = probe_nvidia_smi() {
+    if let Some(desc) = nvidia_probe() {
         tracing::debug!("GPU detected via nvidia-smi: {desc}");
         return (true, Some(desc));
     }

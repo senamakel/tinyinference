@@ -60,24 +60,10 @@ pub fn write_marker_at(path: &Path, marker: &OllamaSpawnMarker) -> Result<(), St
 
     let tmp = path.with_extension("spawn.tmp");
     std::fs::write(&tmp, json).map_err(|e| format!("write marker tmp {}: {e}", tmp.display()))?;
+    // Rust's Windows implementation uses MoveFileExW with replacement
+    // semantics. Do not fall back to remove-then-rename: that creates a crash
+    // window with no ownership marker.
     if let Err(error) = std::fs::rename(&tmp, path) {
-        #[cfg(windows)]
-        if error.kind() == std::io::ErrorKind::AlreadyExists
-            || error.kind() == std::io::ErrorKind::PermissionDenied
-        {
-            std::fs::remove_file(path)
-                .map_err(|e| format!("replace existing marker {}: {e}", path.display()))?;
-            std::fs::rename(&tmp, path).map_err(|e| {
-                format!("rename marker {} -> {}: {e}", tmp.display(), path.display())
-            })?;
-        } else {
-            return Err(format!(
-                "rename marker {} -> {}: {error}",
-                tmp.display(),
-                path.display()
-            ));
-        }
-        #[cfg(not(windows))]
         return Err(format!(
             "rename marker {} -> {}: {error}",
             tmp.display(),

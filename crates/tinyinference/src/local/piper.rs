@@ -7,12 +7,11 @@
 //! advanced users can manually drop in additional `.onnx` files alongside
 //! the bundled one (see Voice TTS factory docs).
 
-use std::io::Read;
 use std::path::PathBuf;
 
 use crate::local::download::{
     ENGINE_PIPER, VoiceInstallState, VoiceInstallStatus, download_to_file, read_status,
-    write_status,
+    try_acquire_install_slot, write_status,
 };
 
 const LOG_PREFIX: &str = "[voice-install:piper]";
@@ -83,6 +82,10 @@ const MIN_VOICE_BYTES: u64 = 30 * 1024 * 1024;
 /// JSON, typically a few KB; anything below 256 bytes is almost certainly
 /// a 404 HTML response masquerading as JSON.
 const MIN_VOICE_JSON_BYTES: u64 = 256;
+const MAX_ARCHIVE_COMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_ARCHIVE_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 
 /// Binaries shipped inside the Piper release archive that must carry the
 /// executable bit for the engine to start.
@@ -127,47 +130,29 @@ fn piper_base_override(key: &str) -> Option<String> {
 fn binary_download_asset() -> Option<BinaryAsset> {
     let base = piper_base_override("OPENHUMAN_PIPER_RELEASE_BASE_URL")
         .unwrap_or_else(|| "https://github.com/rhasspy/piper/releases/latest/download".to_string());
-    if cfg!(target_os = "windows") {
-        return Some(BinaryAsset {
-            url: format!("{base}/piper_windows_amd64.zip"),
-            kind: ArchiveKind::Zip,
-        });
-    }
-    if cfg!(target_os = "macos") {
-        // Two assets exist (`piper_macos_x64.tar.gz` and
-        // `piper_macos_aarch64.tar.gz`). Pick based on the host arch.
-        //
-        // NOTE (#5045): as of the pinned upstream release `2023.11.14-2`
-        // the two macOS assets are byte-identical x86_64 builds — the
-        // `aarch64` name is a mislabel — and neither ships the
-        // `@rpath` dylibs `piper` links against. Selecting the arm64
-        // asset here is still correct, but it cannot make Piper run on
-        // Apple Silicon until upstream republishes the bundle. The arch
-        // is logged below so a bad asset is diagnosable from user logs.
-        let arch = std::env::consts::ARCH;
-        let suffix = match arch {
-            "aarch64" | "arm64" => "macos_aarch64",
-            _ => "macos_x64",
-        };
-        tracing::info!("{LOG_PREFIX} host arch={arch} selecting asset=piper_{suffix}.tar.gz");
-        return Some(BinaryAsset {
-            url: format!("{base}/piper_{suffix}.tar.gz"),
-            kind: ArchiveKind::TarGz,
-        });
-    }
-    if cfg!(target_os = "linux") {
-        let arch = std::env::consts::ARCH;
-        let suffix = match arch {
-            "aarch64" | "arm64" => "linux_aarch64",
-            "armv7" | "arm" => "linux_armv7",
-            _ => "linux_x86_64",
-        };
-        return Some(BinaryAsset {
-            url: format!("{base}/piper_{suffix}.tar.gz"),
-            kind: ArchiveKind::TarGz,
-        });
-    }
-    None
+    binary_asset_for(std::env::consts::OS, std::env::consts::ARCH, &base)
+}
+
+fn binary_asset_for(os: &str, arch: &str, base: &str) -> Option<BinaryAsset> {
+    let (suffix, kind) = match (os, arch) {
+        ("windows", "x86_64") => ("windows_amd64", ArchiveKind::Zip),
+        ("macos", "x86_64") => ("macos_x64", ArchiveKind::TarGz),
+        ("macos", "aarch64" | "arm64") => ("macos_aarch64", ArchiveKind::TarGz),
+        ("linux", "x86_64") => ("linux_x86_64", ArchiveKind::TarGz),
+        ("linux", "aarch64" | "arm64") => ("linux_aarch64", ArchiveKind::TarGz),
+        ("linux", "armv7" | "arm") => ("linux_armv7", ArchiveKind::TarGz),
+        _ => return None,
+    };
+    tracing::info!("{LOG_PREFIX} host os={os} arch={arch} selecting asset=piper_{suffix}");
+    let extension = if kind == ArchiveKind::Zip {
+        "zip"
+    } else {
+        "tar.gz"
+    };
+    Some(BinaryAsset {
+        url: format!("{base}/piper_{suffix}.{extension}"),
+        kind,
+    })
 }
 
 /// Voice file URLs on HuggingFace. Returns `(onnx_url, onnx_json_url)`.
@@ -278,6 +263,8 @@ pub async fn install_piper(
     voice_id: Option<String>,
     force_reinstall: bool,
 ) -> Result<VoiceInstallStatus, String> {
+    let _slot = try_acquire_install_slot(ENGINE_PIPER)
+        .ok_or_else(|| format!("{LOG_PREFIX} install already in progress"))?;
     let voice = voice_id
         .as_deref()
         .map(str::trim)
@@ -303,17 +290,20 @@ pub async fn install_piper(
         // is a no-op when the bits are already set, so this costs a stat per
         // executable on the happy path.
         ensure_executable_bits(install.root());
-        let snapshot = VoiceInstallStatus {
-            engine: ENGINE_PIPER.to_string(),
-            state: VoiceInstallState::Installed,
-            progress: Some(100),
-            downloaded_bytes: None,
-            total_bytes: None,
-            stage: Some("already installed".to_string()),
-            error_detail: None,
-        };
-        write_status(snapshot.clone());
-        return Ok(snapshot);
+        if find_workspace_piper_binary(install).is_some() {
+            let snapshot = VoiceInstallStatus {
+                engine: ENGINE_PIPER.to_string(),
+                state: VoiceInstallState::Installed,
+                progress: Some(100),
+                downloaded_bytes: None,
+                total_bytes: None,
+                stage: Some("already installed".to_string()),
+                error_detail: None,
+            };
+            write_status(snapshot.clone());
+            return Ok(snapshot);
+        }
+        tracing::warn!("{LOG_PREFIX} existing artifacts have no usable executable; reinstalling");
     }
 
     write_status(VoiceInstallStatus {
@@ -358,13 +348,56 @@ pub async fn install_piper(
 }
 
 async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> {
+    let root = install.root();
+    let parent = root
+        .parent()
+        .ok_or_else(|| format!("{LOG_PREFIX} install root has no parent"))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("{LOG_PREFIX} create install parent: {e}"))?;
+    static STAGE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let sequence = STAGE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stage = parent.join(format!(
+        ".piper-installing-{}-{sequence}",
+        std::process::id()
+    ));
+    if stage.exists() {
+        std::fs::remove_dir_all(&stage)
+            .map_err(|e| format!("{LOG_PREFIX} remove stale staging directory: {e}"))?;
+    }
+    if root.exists() {
+        copy_directory(root, &stage)?;
+    } else {
+        std::fs::create_dir_all(&stage)
+            .map_err(|e| format!("{LOG_PREFIX} create staging directory: {e}"))?;
+    }
+    let staged_install = PiperInstall::new(&stage);
+    if let Err(error) = run_install_into(&staged_install, voice).await {
+        let _ = std::fs::remove_dir_all(&stage);
+        return Err(error);
+    }
+    if !installed_artifacts_ok(&staged_install, voice)
+        || find_workspace_piper_binary(&staged_install).is_none()
+    {
+        let _ = std::fs::remove_dir_all(&stage);
+        return Err(format!(
+            "{LOG_PREFIX} staged installation has no usable Piper executable or voice"
+        ));
+    }
+    commit_staged_directory(&stage, root)?;
+    Ok(())
+}
+
+async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<(), String> {
     // 1) Voice files: `.onnx` (heavy) + `.onnx.json` (small sidecar).
     let (onnx_url, json_url) = voice_download_urls(voice);
     let (onnx_path, json_path) = install
         .voice_paths(voice)
         .ok_or_else(|| format!("{LOG_PREFIX} could not resolve voice paths for '{voice}'"))?;
 
-    tracing::debug!("{LOG_PREFIX} downloading voice url={onnx_url}");
+    tracing::debug!(
+        "{LOG_PREFIX} downloading voice url={}",
+        crate::sanitize::redact_url(&onnx_url)
+    );
     update_stage(format!("downloading {voice}.onnx"));
     download_to_file(
         &onnx_url,
@@ -387,10 +420,14 @@ async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> 
             });
         },
     )
-    .await?;
+    .await
+    .map_err(|error| error.to_string())?;
     tracing::debug!("{LOG_PREFIX} voice .onnx staged at {}", onnx_path.display());
 
-    tracing::debug!("{LOG_PREFIX} downloading voice json url={json_url}");
+    tracing::debug!(
+        "{LOG_PREFIX} downloading voice json url={}",
+        crate::sanitize::redact_url(&json_url)
+    );
     update_stage(format!("downloading {voice}.onnx.json"));
     download_to_file(
         &json_url,
@@ -413,7 +450,8 @@ async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> 
             });
         },
     )
-    .await?;
+    .await
+    .map_err(|error| error.to_string())?;
 
     // 2) Binary archive.
     let asset = binary_download_asset()
@@ -425,7 +463,10 @@ async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> 
         .unwrap_or("piper_archive")
         .to_string();
     let archive_path = install.root().join(&archive_name);
-    tracing::debug!("{LOG_PREFIX} downloading binary url={}", asset.url);
+    tracing::debug!(
+        "{LOG_PREFIX} downloading binary url={}",
+        crate::sanitize::redact_url(&asset.url)
+    );
     update_stage("downloading piper binary".to_string());
     download_to_file(
         &asset.url,
@@ -448,7 +489,8 @@ async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> 
             });
         },
     )
-    .await?;
+    .await
+    .map_err(|error| error.to_string())?;
     update_stage("extracting piper binary".to_string());
     let dest = install.root().to_path_buf();
     match asset.kind {
@@ -456,6 +498,11 @@ async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> 
         ArchiveKind::TarGz => extract_tar_gz(&archive_path, &dest)?,
     }
     ensure_executable_bits(&dest);
+    if find_workspace_piper_binary(install).is_none() {
+        return Err(format!(
+            "{LOG_PREFIX} extracted archive contains no usable Piper executable"
+        ));
+    }
     if let Err(e) = std::fs::remove_file(&archive_path) {
         tracing::warn!(
             "{LOG_PREFIX} could not remove archive {}: {e}",
@@ -463,6 +510,66 @@ async fn run_install(install: &PiperInstall, voice: &str) -> Result<(), String> 
         );
     }
 
+    Ok(())
+}
+
+fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(destination)
+        .map_err(|e| format!("{LOG_PREFIX} create {}: {e}", destination.display()))?;
+    for entry in std::fs::read_dir(source)
+        .map_err(|e| format!("{LOG_PREFIX} read {}: {e}", source.display()))?
+    {
+        let entry = entry.map_err(|e| format!("{LOG_PREFIX} read directory entry: {e}"))?;
+        let kind = entry
+            .file_type()
+            .map_err(|e| format!("{LOG_PREFIX} inspect {}: {e}", entry.path().display()))?;
+        let target = destination.join(entry.file_name());
+        if kind.is_dir() {
+            copy_directory(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), &target)
+                .map_err(|e| format!("{LOG_PREFIX} copy {}: {e}", entry.path().display()))?;
+        } else {
+            return Err(format!(
+                "{LOG_PREFIX} refusing to stage non-file entry {}",
+                entry.path().display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn commit_staged_directory(
+    stage: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<(), String> {
+    let backup = destination.with_extension("install-backup");
+    if backup.exists() {
+        std::fs::remove_dir_all(&backup)
+            .map_err(|e| format!("{LOG_PREFIX} remove stale backup: {e}"))?;
+    }
+    if destination.exists() {
+        std::fs::rename(destination, &backup)
+            .map_err(|e| format!("{LOG_PREFIX} stage previous installation: {e}"))?;
+    }
+    if let Err(error) = std::fs::rename(stage, destination) {
+        let restore = if backup.exists() {
+            std::fs::rename(&backup, destination)
+        } else {
+            Ok(())
+        };
+        return Err(format!(
+            "{LOG_PREFIX} commit staged installation: {error}; restore={restore:?}"
+        ));
+    }
+    if backup.exists()
+        && let Err(error) = std::fs::remove_dir_all(&backup)
+    {
+        tracing::warn!(
+            "{LOG_PREFIX} committed installation but could not remove backup {}: {error}",
+            backup.display()
+        );
+    }
     Ok(())
 }
 
@@ -548,7 +655,11 @@ fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result
     let file = std::fs::File::open(zip_path).map_err(|e| format!("{LOG_PREFIX} open zip: {e}"))?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| format!("{LOG_PREFIX} parse zip: {e}"))?;
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(format!("{LOG_PREFIX} zip contains too many entries"));
+    }
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("{LOG_PREFIX} mkdir dest: {e}"))?;
+    let mut expanded = 0u64;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
@@ -557,6 +668,13 @@ fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result
             continue;
         };
         let rel = rel.to_path_buf();
+        if entry.size() > MAX_ARCHIVE_ENTRY_BYTES {
+            return Err(format!("{LOG_PREFIX} zip entry {i} exceeds size limit"));
+        }
+        expanded = expanded
+            .checked_add(entry.size())
+            .filter(|size| *size <= MAX_ARCHIVE_EXPANDED_BYTES)
+            .ok_or_else(|| format!("{LOG_PREFIX} zip expanded size exceeds limit"))?;
         let out_path = dest_dir.join(&rel);
         if entry.is_dir() {
             std::fs::create_dir_all(&out_path)
@@ -582,44 +700,44 @@ fn extract_tar_gz(archive: &std::path::Path, dest_dir: &std::path::Path) -> Resu
         dest_dir.display()
     );
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("{LOG_PREFIX} mkdir dest: {e}"))?;
+    let metadata =
+        std::fs::metadata(archive).map_err(|e| format!("{LOG_PREFIX} inspect tar.gz: {e}"))?;
+    if metadata.len() > MAX_ARCHIVE_COMPRESSED_BYTES {
+        return Err(format!(
+            "{LOG_PREFIX} compressed archive exceeds size limit"
+        ));
+    }
     let file =
         std::fs::File::open(archive).map_err(|e| format!("{LOG_PREFIX} open tar.gz: {e}"))?;
-    // The Piper tarball is gzipped. The `flate2` crate is already a
-    // transitive dep through `tar`; if it's not directly available we
-    // would need to add it here. As of this writing the workspace uses
-    // gzip-aware tar via the `flate2` dep that ships with `zip`'s
-    // companion utilities — but the standard pattern in this codebase
-    // is to shell out to `tar` so we don't grow the dep tree.
-    //
-    // To keep the installer self-contained without adding a new
-    // workspace dep, decompress in-memory then hand the plain tar to
-    // the `tar` crate. The Piper archive is only ~7 MB so a single
-    // in-memory inflate is acceptable.
-    let mut gz = std::io::BufReader::new(file);
-    let mut compressed = Vec::new();
-    gz.read_to_end(&mut compressed)
-        .map_err(|e| format!("{LOG_PREFIX} read tar.gz: {e}"))?;
-    let decompressed =
-        inflate_gzip(&compressed).map_err(|e| format!("{LOG_PREFIX} inflate tar.gz: {e}"))?;
-    let mut tar = tar::Archive::new(std::io::Cursor::new(decompressed));
-    tar.unpack(dest_dir)
-        .map_err(|e| format!("{LOG_PREFIX} unpack tar: {e}"))?;
+    let decoder = flate2::read::GzDecoder::new(std::io::BufReader::new(file));
+    let mut tar = tar::Archive::new(decoder);
+    let entries = tar
+        .entries()
+        .map_err(|e| format!("{LOG_PREFIX} read tar entries: {e}"))?;
+    let mut count = 0usize;
+    let mut expanded = 0u64;
+    for entry in entries {
+        let mut entry = entry.map_err(|e| format!("{LOG_PREFIX} read tar entry: {e}"))?;
+        count += 1;
+        if count > MAX_ARCHIVE_ENTRIES {
+            return Err(format!("{LOG_PREFIX} tar contains too many entries"));
+        }
+        let size = entry.size();
+        if size > MAX_ARCHIVE_ENTRY_BYTES {
+            return Err(format!("{LOG_PREFIX} tar entry exceeds size limit"));
+        }
+        expanded = expanded
+            .checked_add(size)
+            .filter(|total| *total <= MAX_ARCHIVE_EXPANDED_BYTES)
+            .ok_or_else(|| format!("{LOG_PREFIX} tar expanded size exceeds limit"))?;
+        if !entry
+            .unpack_in(dest_dir)
+            .map_err(|e| format!("{LOG_PREFIX} unpack tar entry: {e}"))?
+        {
+            return Err(format!("{LOG_PREFIX} tar entry escapes destination"));
+        }
+    }
     Ok(())
-}
-
-/// Inflate a gzip stream using the `flate2` crate that ships with `zip`'s
-/// deflate feature. We re-export through the `zip` crate's surface to
-/// avoid a direct flate2 dep declaration.
-fn inflate_gzip(compressed: &[u8]) -> Result<Vec<u8>, String> {
-    // `flate2` is pulled in transitively by `zip` with the `deflate`
-    // feature. Use its public reader API directly.
-    use flate2::read::GzDecoder;
-    let mut decoder = GzDecoder::new(compressed);
-    let mut out = Vec::new();
-    decoder
-        .read_to_end(&mut out)
-        .map_err(|e| format!("gz decode: {e}"))?;
-    Ok(out)
 }
 
 /// Returns the workspace-installed Piper binary path if one exists.

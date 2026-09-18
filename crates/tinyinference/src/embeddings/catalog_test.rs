@@ -63,16 +63,15 @@ fn all_models_have_valid_dimensions() {
 }
 
 #[test]
-fn non_embedding_model_reason_rejects_openrouter_free_tier() {
-    // TAURI-RUST-9SK — the exact incident id and case/whitespace variants.
+fn non_embedding_model_reason_rejects_confirmed_chat_only_model() {
     for id in [
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "meta-llama/llama-3-70b-instruct:FREE",
-        "  some-chat-model:free  ",
+        "NVIDIA/NEMOTRON-3-SUPER-120B-A12B:FREE",
+        "  nvidia/nemotron-3-super-120b-a12b:free  ",
     ] {
         assert!(
             non_embedding_model_reason(id).is_some(),
-            "{id:?} (`:free` chat tier) must be rejected as an embeddings model"
+            "{id:?} must be rejected as a confirmed chat-only model"
         );
     }
 }
@@ -88,6 +87,9 @@ fn non_embedding_model_reason_accepts_real_embedding_ids() {
         "nomic-embed-text:latest",
         "bge-m3",
         "mxbai-embed-large",
+        "nvidia/nemotron-3-embed-1b:free",
+        "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+        "meta-llama/llama-3-70b-instruct:free",
         "",
     ] {
         assert!(

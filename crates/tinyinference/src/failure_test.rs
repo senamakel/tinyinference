@@ -39,6 +39,18 @@ fn provider_failure_taxonomy_is_complete() {
 }
 
 #[test]
+fn structured_status_takes_precedence_over_message_heuristics() {
+    assert_eq!(
+        classify_provider_failure(Some(400), None, "proxy said bad gateway"),
+        ProviderFailureClass::NonRetryable
+    );
+    assert_eq!(
+        classify_provider_failure(None, Some("invalid_request"), "502 bad gateway"),
+        ProviderFailureClass::NonRetryable
+    );
+}
+
+#[test]
 fn structured_provider_error_uses_the_same_classifier() {
     let error = ProviderError {
         status: Some(429),

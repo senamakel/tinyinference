@@ -118,12 +118,14 @@ fn indicates_terminal_request(lower: &str) -> bool {
         "missing api key",
         "api key not set",
         "authentication failed",
+        "authentication_error",
         "auth failed",
         "unauthorized",
         "forbidden",
         "permission denied",
         "access denied",
         "invalid token",
+        "invalid_request",
     ]
     .iter()
     .any(|hint| lower.contains(hint))
@@ -145,7 +147,14 @@ pub fn classify_provider_failure(
     code: Option<&str>,
     message: &str,
 ) -> ProviderFailureClass {
-    let status = status.or_else(|| structured_http_status(message));
+    let has_structured_status = status.is_some();
+    let has_structured_code = code.is_some_and(|value| !value.trim().is_empty());
+    let structured_code = code.unwrap_or_default().to_ascii_lowercase();
+    let status = status.or_else(|| {
+        (!has_structured_code)
+            .then(|| structured_http_status(message))
+            .flatten()
+    });
     let lower = match code {
         Some(code) if !code.trim().is_empty() => format!("{message} {code}").to_ascii_lowercase(),
         _ => message.to_ascii_lowercase(),
@@ -163,12 +172,15 @@ pub fn classify_provider_failure(
     }
 
     if status.is_some_and(|value| matches!(value, 408 | 409) || value >= 500)
-        || indicates_upstream_failure(&lower)
+        || (has_structured_code && indicates_upstream_failure(&structured_code))
+        || (!has_structured_status && !has_structured_code && indicates_upstream_failure(&lower))
     {
         return ProviderFailureClass::UpstreamUnhealthy;
     }
 
-    if status.is_some_and(|value| (400..500).contains(&value)) || indicates_terminal_request(&lower)
+    if status.is_some_and(|value| (400..500).contains(&value))
+        || (has_structured_code && indicates_terminal_request(&structured_code))
+        || (!has_structured_status && !has_structured_code && indicates_terminal_request(&lower))
     {
         return ProviderFailureClass::NonRetryable;
     }

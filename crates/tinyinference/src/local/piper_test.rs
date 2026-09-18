@@ -136,6 +136,18 @@ fn binary_download_asset_picks_an_os_specific_url() {
     }
 }
 
+#[test]
+fn binary_assets_reject_unsupported_architectures() {
+    let base = "https://example.invalid/releases";
+    assert!(binary_asset_for("windows", "aarch64", base).is_none());
+    assert!(binary_asset_for("windows", "i686", base).is_none());
+    assert!(binary_asset_for("linux", "riscv64", base).is_none());
+    assert!(binary_asset_for("linux", "i686", base).is_none());
+    assert!(binary_asset_for("macos", "powerpc", base).is_none());
+    assert!(binary_asset_for("linux", "x86_64", base).is_some());
+    assert!(binary_asset_for("macos", "aarch64", base).is_some());
+}
+
 /// Serialise tests that write into the shared `~/.openhuman/bin/piper/`
 /// directory; reuses the module-wide `local_ai_test_guard` so paths +
 /// sibling installer tests are serialised through the same lock.
@@ -238,6 +250,36 @@ async fn install_short_circuits_when_already_installed() {
     let snap = result.unwrap();
     assert_eq!(snap.state, VoiceInstallState::Installed);
     wipe_install_dir(&install);
+}
+
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn public_installer_owns_the_install_slot() {
+    let _g = shared_install_lock();
+    let held = try_acquire_install_slot(ENGINE_PIPER).expect("test slot");
+    let (_tmp, install) = temp_install();
+    let error = install_piper(&install, None, false)
+        .await
+        .expect_err("a direct concurrent caller must be rejected");
+    assert!(error.contains("already in progress"), "{error}");
+    drop(held);
+}
+
+#[test]
+fn staged_directory_commit_replaces_only_after_validation() {
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().join("piper");
+    let stage = temp.path().join("stage");
+    std::fs::create_dir_all(&destination).unwrap();
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(destination.join("artifact"), b"old").unwrap();
+    std::fs::write(stage.join("artifact"), b"new").unwrap();
+
+    commit_staged_directory(&stage, &destination).unwrap();
+
+    assert_eq!(std::fs::read(destination.join("artifact")).unwrap(), b"new");
+    assert!(!stage.exists());
+    assert!(!destination.with_extension("install-backup").exists());
 }
 
 #[test]

@@ -23,9 +23,10 @@ pub struct AnthropicConfig<'a> {
 
 impl std::fmt::Debug for AnthropicConfig<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let endpoint = crate::sanitize::redact_url(self.endpoint);
         formatter
             .debug_struct("AnthropicConfig")
-            .field("endpoint", &self.endpoint)
+            .field("endpoint", &endpoint)
             .field("api_key", &"[REDACTED]")
             .field("model", &self.model)
             .field("temperature_override", &self.temperature_override)

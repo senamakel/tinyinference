@@ -264,12 +264,12 @@ pub async fn download_to_file(
     expected_sha256: Option<&str>,
     min_bytes: u64,
     log_prefix: &str,
-    mut on_progress: impl FnMut(u64, Option<u64>),
-) -> Result<(), String> {
+    on_progress: impl FnMut(u64, Option<u64>),
+) -> crate::Result<()> {
     if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("{log_prefix} mkdir {}: {e}", parent.display()))?;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            crate::Error::DownloadIo(format!("{log_prefix} mkdir {}: {e}", parent.display()))
+        })?;
     }
 
     let part_path = part_path(dest);
@@ -282,7 +282,8 @@ pub async fn download_to_file(
         let _ = tokio::fs::remove_file(&part_path).await;
     }
 
-    tracing::debug!("{log_prefix} GET {url} -> {}", part_path.display());
+    let safe_url = crate::sanitize::redact_url(url);
+    tracing::debug!("{log_prefix} GET {safe_url} -> {}", part_path.display());
     let client = reqwest::Client::builder()
         // 15s connect handshake; 30min overall request budget (covers 1.6 GB
         // GGML model on a 1 Mbps link). Per-chunk idle timeout is enforced
@@ -291,18 +292,17 @@ pub async fn download_to_file(
         .connect_timeout(Duration::from_secs(15))
         .timeout(REQUEST_TIMEOUT)
         .build()
-        .map_err(|e| format!("{log_prefix} build http client: {e}"))?;
+        .map_err(|e| crate::Error::DownloadHttp(format!("{log_prefix} build http client: {e}")))?;
     let started = Instant::now();
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("{log_prefix} request {url}: {e}"))?;
+    let resp =
+        client.get(url).send().await.map_err(|e| {
+            crate::Error::DownloadHttp(format!("{log_prefix} request {safe_url}: {e}"))
+        })?;
     if !resp.status().is_success() {
-        return Err(format!(
-            "{log_prefix} non-2xx response from {url}: {}",
+        return Err(crate::Error::DownloadHttp(format!(
+            "{log_prefix} non-2xx response from {safe_url}: {}",
             resp.status()
-        ));
+        )));
     }
     let total = resp.content_length();
     tracing::debug!(
@@ -311,12 +311,61 @@ pub async fn download_to_file(
         total
     );
 
-    let mut file = tokio::fs::File::create(&part_path)
-        .await
-        .map_err(|e| format!("{log_prefix} create {}: {e}", part_path.display()))?;
+    let stream = resp.bytes_stream();
+    write_download_stream(
+        stream,
+        DownloadTarget {
+            total,
+            part_path: &part_path,
+            dest,
+            expected_sha256,
+            min_bytes,
+            log_prefix,
+        },
+        on_progress,
+    )
+    .await?;
+    tracing::debug!(
+        "{log_prefix} downloaded -> {} elapsed_ms={}",
+        dest.display(),
+        started.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+#[derive(Debug)]
+struct DownloadTarget<'a> {
+    total: Option<u64>,
+    part_path: &'a Path,
+    dest: &'a Path,
+    expected_sha256: Option<&'a str>,
+    min_bytes: u64,
+    log_prefix: &'a str,
+}
+
+async fn write_download_stream<S, E>(
+    stream: S,
+    target: DownloadTarget<'_>,
+    mut on_progress: impl FnMut(u64, Option<u64>),
+) -> crate::Result<()>
+where
+    S: futures::Stream<Item = std::result::Result<bytes::Bytes, E>>,
+    E: std::fmt::Display,
+{
+    let DownloadTarget {
+        total,
+        part_path,
+        dest,
+        expected_sha256,
+        min_bytes,
+        log_prefix,
+    } = target;
+    futures::pin_mut!(stream);
+    let mut file = tokio::fs::File::create(part_path).await.map_err(|e| {
+        crate::Error::DownloadIo(format!("{log_prefix} create {}: {e}", part_path.display()))
+    })?;
     let mut hasher = expected_sha256.is_some().then(Sha256::new);
     let mut downloaded: u64 = 0;
-    let mut stream = resp.bytes_stream();
     loop {
         // Per-chunk idle timeout — if no bytes arrive within CHUNK_IDLE_TIMEOUT,
         // bail out so a stalled half-open TCP connection doesn't hold the install
@@ -328,10 +377,10 @@ pub async fn download_to_file(
             Err(_) => {
                 drop(file);
                 let _ = tokio::fs::remove_file(&part_path).await;
-                return Err(format!(
+                return Err(crate::Error::DownloadTimeout(format!(
                     "{log_prefix} body stream idle for >{}s after {downloaded} bytes; aborting",
                     CHUNK_IDLE_TIMEOUT.as_secs()
-                ));
+                )));
             }
         };
         let bytes = match chunk {
@@ -339,7 +388,9 @@ pub async fn download_to_file(
             Err(e) => {
                 drop(file);
                 let _ = tokio::fs::remove_file(&part_path).await;
-                return Err(format!("{log_prefix} body stream: {e}"));
+                return Err(crate::Error::DownloadHttp(format!(
+                    "{log_prefix} body stream: {e}"
+                )));
             }
         };
         if let Some(h) = hasher.as_mut() {
@@ -348,21 +399,24 @@ pub async fn download_to_file(
         if let Err(e) = file.write_all(&bytes).await {
             drop(file);
             let _ = tokio::fs::remove_file(&part_path).await;
-            return Err(format!("{log_prefix} write {}: {e}", part_path.display()));
+            return Err(crate::Error::DownloadIo(format!(
+                "{log_prefix} write {}: {e}",
+                part_path.display()
+            )));
         }
         downloaded = downloaded.saturating_add(bytes.len() as u64);
         on_progress(downloaded, total);
     }
-    file.flush()
-        .await
-        .map_err(|e| format!("{log_prefix} flush {}: {e}", part_path.display()))?;
+    file.flush().await.map_err(|e| {
+        crate::Error::DownloadIo(format!("{log_prefix} flush {}: {e}", part_path.display()))
+    })?;
     drop(file);
 
     if downloaded < min_bytes {
         let _ = tokio::fs::remove_file(&part_path).await;
-        return Err(format!(
+        return Err(crate::Error::DownloadIntegrity(format!(
             "{log_prefix} downloaded payload too small: {downloaded} bytes < min {min_bytes}"
-        ));
+        )));
     }
     if let (Some(expected), Some(hasher)) = (expected_sha256, hasher) {
         let got = hex::encode(hasher.finalize());
@@ -375,33 +429,62 @@ pub async fn download_to_file(
                 got
             );
             let _ = tokio::fs::remove_file(&part_path).await;
-            return Err(format!(
+            return Err(crate::Error::DownloadIntegrity(format!(
                 "{log_prefix} sha256 mismatch (expected {expected_norm}, got {got})"
-            ));
+            )));
         }
     }
 
-    // Atomic rename — only after all checks pass. On Windows
-    // `tokio::fs::rename` maps to `MoveFileExW` which fails if the dest
-    // already exists, so remove it first.
-    if dest.exists() {
-        tokio::fs::remove_file(dest)
-            .await
-            .map_err(|e| format!("{log_prefix} remove existing {}: {e}", dest.display()))?;
+    commit_download(part_path, dest, log_prefix).await?;
+    Ok(())
+}
+
+async fn commit_download(part_path: &Path, dest: &Path, log_prefix: &str) -> crate::Result<()> {
+    match tokio::fs::rename(part_path, dest).await {
+        Ok(()) => return Ok(()),
+        Err(error) if !dest.exists() => {
+            return Err(crate::Error::DownloadIo(format!(
+                "{log_prefix} rename {} -> {}: {error}",
+                part_path.display(),
+                dest.display()
+            )));
+        }
+        Err(_) => {}
     }
-    tokio::fs::rename(&part_path, dest).await.map_err(|e| {
-        format!(
-            "{log_prefix} rename {} -> {}: {e}",
+
+    // Windows cannot rename over an existing file. Move the old artifact to a
+    // sibling backup and restore it if committing the validated replacement
+    // fails, so a failed reinstall never destroys the working copy.
+    let backup = dest.with_extension("replace-backup");
+    if backup.exists() {
+        tokio::fs::remove_file(&backup).await.map_err(|e| {
+            crate::Error::DownloadIo(format!(
+                "{log_prefix} remove stale backup {}: {e}",
+                backup.display()
+            ))
+        })?;
+    }
+    tokio::fs::rename(dest, &backup).await.map_err(|e| {
+        crate::Error::DownloadIo(format!(
+            "{log_prefix} stage existing {} -> {}: {e}",
+            dest.display(),
+            backup.display()
+        ))
+    })?;
+    if let Err(error) = tokio::fs::rename(part_path, dest).await {
+        let restore = tokio::fs::rename(&backup, dest).await;
+        return Err(crate::Error::DownloadIo(format!(
+            "{log_prefix} commit replacement {} -> {}: {error}; restore={restore:?}",
             part_path.display(),
             dest.display()
-        )
-    })?;
-    tracing::debug!(
-        "{log_prefix} downloaded {} bytes -> {} elapsed_ms={}",
-        downloaded,
-        dest.display(),
-        started.elapsed().as_millis()
-    );
+        )));
+    }
+    if let Err(error) = tokio::fs::remove_file(&backup).await {
+        tracing::warn!(
+            "{log_prefix} committed replacement but could not remove backup {}: {error}",
+            backup.display()
+        );
+    }
     Ok(())
 }
 
