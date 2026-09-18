@@ -19,7 +19,9 @@ The crate provides:
 - conservative context-window and vision-capability hints for raw model ids
   when a provider cannot supply an authoritative model profile;
 - normalized provider model-catalog parsing and local runtime model, vision,
-  embedding, speech model, voice, and quantization resolution.
+  embedding, speech model, voice, and quantization resolution;
+- embedding-provider catalogs, local model-tier presets, Ollama installation,
+  and Piper binary/voice installation with atomic downloads and status tracking.
 
 ## Use
 
@@ -51,7 +53,7 @@ crates/tinyinference/
     ├── cache/       request fingerprints and response-cache contracts
     ├── catalog/     provider model-catalog types and response parsing
     ├── embeddings/ embedding clients, vector store, and retriever
-    ├── local/      local runtime wire types, profiles, and model resolution
+    ├── local/      local runtime profiles, model selection, and installers
     ├── message/    provider-neutral message and content blocks
     ├── model/      ChatModel, request/response, profiles, and streaming
     ├── providers/  mock and OpenAI-compatible transports
