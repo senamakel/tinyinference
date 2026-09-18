@@ -13,11 +13,9 @@ pub fn decode_pcm16le_frame(data: &[u8]) -> Option<Vec<i16>> {
     if !data.len().is_multiple_of(2) {
         return None;
     }
-    Some(
-        data.chunks_exact(2)
-            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect(),
-    )
+    let (samples, remainder) = data.as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    Some(samples.iter().copied().map(i16::from_le_bytes).collect())
 }
 
 /// Append samples to the sliding and full buffers without exceeding the cap.
