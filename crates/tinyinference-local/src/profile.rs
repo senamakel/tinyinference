@@ -93,8 +93,8 @@ impl LocalProviderKind {
             "lmstudio" | "lm-studio" | "lm_studio" => Some(Self::LmStudio),
             "mlx" | "mlx-server" | "mlx_lm" => Some(Self::Mlx),
             "omlx" | "omlx-server" => Some(Self::Omlx),
-            "local-openai" | "local_openai" | "custom-openai" | "custom_openai" | "llamacpp"
-            | "llama.cpp" | "vllm" => Some(Self::LocalOpenai),
+            "openai" | "local-openai" | "local_openai" | "custom-openai" | "custom_openai"
+            | "llamacpp" | "llama.cpp" | "vllm" => Some(Self::LocalOpenai),
             _ => None,
         }
     }
@@ -255,8 +255,11 @@ pub fn profile_for_kind(kind: LocalProviderKind) -> &'static LocalProviderProfil
 pub fn kind_from_provider_string(provider: &str) -> Option<LocalProviderKind> {
     let p = provider.trim().to_ascii_lowercase();
     LocalProviderKind::from_str_loose(&p).or_else(|| {
-        p.split_once(':')
-            .and_then(|(prefix, _)| LocalProviderKind::from_str_loose(prefix))
+        p.split_once(':').and_then(|(prefix, _)| {
+            (prefix != "openai")
+                .then(|| LocalProviderKind::from_str_loose(prefix))
+                .flatten()
+        })
     })
 }
 

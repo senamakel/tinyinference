@@ -29,10 +29,10 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Overall request timeout for a single install download. 30 minutes covers
-/// the 1.6 GB `ggml-large-v3-turbo` model on a 1 Mbps link with headroom;
-/// anything slower probably isn't realistically going to finish anyway.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(1800);
+/// Overall request timeout for a single install download. The idle timeout
+/// catches dead connections; this generous cap permits multi-gigabyte models
+/// on slow but active links.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Per-chunk idle timeout. If the body stream produces no bytes for this
 /// long, treat the connection as dead and abort so the caller can retry

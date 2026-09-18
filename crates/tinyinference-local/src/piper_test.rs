@@ -96,10 +96,40 @@ fn voice_paths_reject_path_traversal_and_absolute_paths() {
 
 #[test]
 fn voice_download_urls_anchor_on_hf_bucket() {
-    let (onnx, json) = voice_download_urls("en_US-lessac-medium").unwrap();
+    let (onnx, json) = voice_download_urls_with_base("en_US-lessac-medium", None).unwrap();
     assert!(onnx.starts_with("https://huggingface.co/rhasspy/piper-voices/resolve/main/"));
     assert!(onnx.ends_with("en_US-lessac-medium.onnx"));
     assert!(json.ends_with("en_US-lessac-medium.onnx.json"));
+}
+
+#[test]
+fn voice_download_urls_accept_an_explicit_base_without_process_environment() {
+    let (onnx, json) =
+        voice_download_urls_with_base("en_US-lessac-medium", Some(" http://127.0.0.1:4321/ "))
+            .unwrap();
+    assert_eq!(
+        onnx,
+        "http://127.0.0.1:4321/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
+    );
+    assert_eq!(json, format!("{onnx}.json"));
+}
+
+#[test]
+fn malformed_voice_sidecar_is_not_installed() {
+    let (_tmp, install) = temp_install();
+    let (onnx, json) = install.voice_paths(DEFAULT_PIPER_VOICE).unwrap();
+    std::fs::create_dir_all(onnx.parent().unwrap()).unwrap();
+    std::fs::write(&onnx, vec![0u8; (MIN_VOICE_BYTES + 1) as usize]).unwrap();
+    std::fs::write(&json, vec![b'x'; (MIN_VOICE_JSON_BYTES + 1) as usize]).unwrap();
+    let binary = install.binary_candidates()[0].clone();
+    std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+    std::fs::write(&binary, b"stub").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(!installed_artifacts_ok(&install, DEFAULT_PIPER_VOICE));
 }
 
 #[test]

@@ -248,13 +248,14 @@ pub fn preset_for_tier(tier: ModelTier) -> Option<ModelPreset> {
 
 /// Recommend a tier based on device capabilities.
 pub fn recommend_tier(device: &DeviceProfile) -> ModelTier {
-    // NOTE: the MVP intentionally caps every device at `MVP_MAX_TIER`
-    // regardless of installed RAM (the `recommend_tier_scales_with_ram` test
-    // pins this non-scaling contract). `ram_gb` is read only for the
-    // diagnostic log below; RAM->tier scaling is deferred until the higher
-    // tiers are productised.
     let ram_gb = device.total_ram_gb();
-    let tier = MVP_MAX_TIER;
+    let tier = match ram_gb {
+        0..=1 => ModelTier::Ram1Gb,
+        2..=3 => ModelTier::Ram2To4Gb,
+        4..=7 => ModelTier::Ram4To8Gb,
+        8..=15 => ModelTier::Ram8To16Gb,
+        _ => ModelTier::Ram16PlusGb,
+    };
     tracing::debug!(ram_gb, ?tier, "[local_ai] recommended model tier");
     tier
 }

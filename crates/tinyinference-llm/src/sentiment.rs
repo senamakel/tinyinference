@@ -35,7 +35,7 @@ const VALID_VALENCES: &[&str] = &["positive", "negative", "neutral"];
 /// Falls back to neutral on any parsing error.
 pub fn parse_sentiment_response(text: &str) -> SentimentResult {
     let parts: Vec<&str> = text.split_whitespace().collect();
-    if parts.len() < 3 {
+    if parts.len() != 3 {
         tracing::debug!(
             parts = parts.len(),
             "[local_ai:sentiment] unexpected token count, falling back to neutral"

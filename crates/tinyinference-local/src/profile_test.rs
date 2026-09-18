@@ -62,6 +62,10 @@ fn kind_from_str_loose_accepts_aliases() {
         LocalProviderKind::from_str_loose("custom_openai"),
         Some(LocalProviderKind::LocalOpenai)
     );
+    assert_eq!(
+        LocalProviderKind::from_str_loose("openai"),
+        Some(LocalProviderKind::LocalOpenai)
+    );
     assert_eq!(LocalProviderKind::from_str_loose("unknown"), None);
 }
 

@@ -243,6 +243,7 @@ fn resolve_vision_model_id_errors_when_unconfigured() {
     config.local_ai.vision_model_id = String::new();
 
     let err = resolve_vision_model_id(&config).expect_err("expected a vision error");
+    let err = err.to_string();
     assert!(
         err.contains("vision_model_id"),
         "error should name the config key to set: {err}"
@@ -292,6 +293,7 @@ fn resolve_vision_model_id_errors_on_a_chat_only_model_instead_of_substituting()
 
     let err = resolve_vision_model_id(&config)
         .expect_err("a chat-only vision model must be an error, not a substitution");
+    let err = err.to_string();
 
     assert!(
         err.contains("gemma3n:e4b-it-q8_0"),

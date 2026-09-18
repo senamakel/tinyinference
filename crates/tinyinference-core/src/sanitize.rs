@@ -34,7 +34,11 @@ fn truncate_with_suffix(input: &str, max_chars: usize, suffix: &str) -> String {
     if input.chars().count() <= max_chars {
         return input.to_string();
     }
-    let mut truncated: String = input.chars().take(max_chars).collect();
+    let suffix_chars = suffix.chars().count();
+    if suffix_chars >= max_chars {
+        return suffix.chars().take(max_chars).collect();
+    }
+    let mut truncated: String = input.chars().take(max_chars - suffix_chars).collect();
     truncated.push_str(suffix);
     truncated
 }
@@ -117,4 +121,24 @@ pub fn format_anyhow_chain(err: &anyhow::Error) -> String {
         .join(" | ");
     let scrubbed = scrub_secret_patterns(&joined);
     truncate_with_suffix(&scrubbed, TRANSPORT_ERROR_MAX_CHARS, "…")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncation_limit_includes_the_suffix() {
+        let sanitized = sanitize_api_error(&"x".repeat(MAX_API_ERROR_CHARS + 50));
+        assert_eq!(sanitized.chars().count(), MAX_API_ERROR_CHARS);
+        assert!(sanitized.ends_with("..."));
+    }
+
+    #[test]
+    fn secret_scrubbing_preserves_unicode_boundaries() {
+        assert_eq!(
+            scrub_secret_patterns("é before sk-secret after 🚀"),
+            "é before [REDACTED] after 🚀"
+        );
+    }
 }

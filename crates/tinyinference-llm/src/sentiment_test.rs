@@ -31,6 +31,14 @@ fn parse_too_few_tokens() {
 }
 
 #[test]
+fn parse_extra_tokens_returns_neutral() {
+    let r = parse_sentiment_response("joy positive 0.9 explanation");
+    assert_eq!(r.emotion, "neutral");
+    assert_eq!(r.valence, "neutral");
+    assert_eq!(r.confidence, 1.0);
+}
+
+#[test]
 fn parse_bad_confidence() {
     let r = parse_sentiment_response("sadness negative abc");
     assert_eq!(r.emotion, "sadness");

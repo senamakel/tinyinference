@@ -50,27 +50,48 @@ impl OllamaSpawnMarker {
 /// Write `marker` to `path`, replacing any existing file. Creates the
 /// parent directory if needed. Uses a tmp-and-rename so a crash mid-write
 /// can't leave truncated JSON.
-pub fn write_marker_at(path: &Path, marker: &OllamaSpawnMarker) -> Result<(), String> {
+pub fn write_marker_at(path: &Path, marker: &OllamaSpawnMarker) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create marker dir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            crate::Error::MarkerIo(format!("create marker dir {}: {e}", parent.display()))
+        })?;
     }
-    let json =
-        serde_json::to_string_pretty(marker).map_err(|e| format!("serialize spawn marker: {e}"))?;
+    let json = serde_json::to_string_pretty(marker)
+        .map_err(|e| crate::Error::MarkerSerialization(e.to_string()))?;
 
     let tmp = path.with_extension("spawn.tmp");
-    std::fs::write(&tmp, json).map_err(|e| format!("write marker tmp {}: {e}", tmp.display()))?;
-    // Rust's Windows implementation uses MoveFileExW with replacement
-    // semantics. Do not fall back to remove-then-rename: that creates a crash
-    // window with no ownership marker.
-    if let Err(error) = std::fs::rename(&tmp, path) {
-        return Err(format!(
+    std::fs::write(&tmp, json)
+        .map_err(|e| crate::Error::MarkerIo(format!("write marker tmp {}: {e}", tmp.display())))?;
+    if let Err(error) = replace_marker_file(&tmp, path) {
+        return Err(crate::Error::MarkerIo(format!(
             "rename marker {} -> {}: {error}",
             tmp.display(),
             path.display()
-        ));
+        )));
     }
     Ok(())
+}
+
+fn replace_marker_file(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    match std::fs::rename(tmp, path) {
+        Ok(()) => Ok(()),
+        Err(_error) if path.exists() => {
+            let backup = path.with_extension("spawn.backup");
+            if backup.exists() {
+                std::fs::remove_file(&backup)?;
+            }
+            std::fs::rename(path, &backup)?;
+            if let Err(commit_error) = std::fs::rename(tmp, path) {
+                let _ = std::fs::rename(&backup, path);
+                return Err(commit_error);
+            }
+            if let Err(cleanup_error) = std::fs::remove_file(&backup) {
+                tracing::warn!(path = %backup.display(), error = %cleanup_error, "failed to remove replaced spawn-marker backup");
+            }
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Reads a marker, returning `None` when it is missing or malformed.

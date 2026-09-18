@@ -158,14 +158,27 @@ fn binary_asset_for(os: &str, arch: &str, base: &str) -> Option<BinaryAsset> {
 
 /// Voice file URLs on HuggingFace. Returns `(onnx_url, onnx_json_url)`.
 fn voice_download_urls(voice_id: &str) -> Option<(String, String)> {
+    voice_download_urls_with_base(
+        voice_id,
+        piper_base_override("OPENHUMAN_PIPER_VOICES_BASE_URL").as_deref(),
+    )
+}
+
+fn voice_download_urls_with_base(
+    voice_id: &str,
+    base_override: Option<&str>,
+) -> Option<(String, String)> {
     // The Piper voices repo uses the structure:
     //   en/en_US/lessac/medium/en_US-lessac-medium.onnx
     //   en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
     // We only support the bundled default — multi-voice support is
     // tracked separately. The path components mirror the voice id.
     let (lang_short, locale, name, quality) = decode_voice_id(voice_id)?;
-    let base = match piper_base_override("OPENHUMAN_PIPER_VOICES_BASE_URL") {
-        Some(root) => format!("{root}/{lang_short}/{locale}/{name}/{quality}"),
+    let base = match base_override {
+        Some(root) => format!(
+            "{}/{lang_short}/{locale}/{name}/{quality}",
+            root.trim().trim_end_matches('/')
+        ),
         None => format!(
             "https://huggingface.co/rhasspy/piper-voices/resolve/main/{lang_short}/{locale}/{name}/{quality}"
         ),
@@ -224,9 +237,7 @@ fn installed_artifacts_ok(install: &PiperInstall, voice_id: &str) -> bool {
             let onnx_ok = std::fs::metadata(&onnx)
                 .map(|m| m.is_file() && m.len() >= MIN_VOICE_BYTES)
                 .unwrap_or(false);
-            let json_ok = std::fs::metadata(&json)
-                .map(|m| m.is_file() && m.len() >= MIN_VOICE_JSON_BYTES)
-                .unwrap_or(false);
+            let json_ok = voice_sidecar_is_valid(&json);
             tracing::debug!(
                 "{LOG_PREFIX} install check onnx={} onnx_ok={} json={} json_ok={}",
                 onnx.display(),
@@ -244,6 +255,19 @@ fn installed_artifacts_ok(install: &PiperInstall, voice_id: &str) -> bool {
         voice_ok
     );
     binary_ok && voice_ok
+}
+
+fn voice_sidecar_is_valid(path: &std::path::Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() || metadata.len() < MIN_VOICE_JSON_BYTES {
+        return false;
+    }
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|value| value.is_object())
 }
 
 /// Kick off (or re-kick) a Piper install. `force_reinstall = true`
@@ -453,6 +477,12 @@ async fn run_install_into(install: &PiperInstall, voice: &str) -> Result<()> {
         },
     )
     .await?;
+    if !voice_sidecar_is_valid(&json_path) {
+        let _ = std::fs::remove_file(&json_path);
+        return Err(Error::DownloadIntegrity(format!(
+            "{LOG_PREFIX} downloaded voice sidecar is not a valid JSON object"
+        )));
+    }
 
     // 2) Binary archive.
     let asset = binary_download_asset().ok_or_else(|| {

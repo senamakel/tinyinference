@@ -150,7 +150,7 @@ fn enforce_mvp_chat_allowlist(resolved: &str) -> String {
 /// which is how the nameless `POST /api/pull` in `ensure_ollama_model_available`
 /// came about. Both that bug and its replacement failed the same way: they
 /// answered "which model?" with something the user never asked for.
-fn enforce_vision_capability(resolved: &str) -> Result<String, String> {
+fn enforce_vision_capability(resolved: &str) -> crate::Result<String> {
     if tinyinference_llm::model::model_id_supports_vision(resolved) {
         return Ok(resolved.to_string());
     }
@@ -159,12 +159,12 @@ fn enforce_vision_capability(resolved: &str) -> Result<String, String> {
         "[local_ai] configured vision model is chat-only; refusing to substitute"
     );
     let suggestions = VISION_MODEL_SUGGESTIONS.join("`, `");
-    Err(format!(
+    Err(crate::Error::VisionModelUnsupported(format!(
         "the selected vision model `{resolved}` is not vision-capable — it cannot accept image \
          input. Set `local_ai.vision_model_id` to a vision-capable model (for example \
          `{suggestions}`) and pull it with `ollama pull <model>`, or route the vision workload \
          to a cloud provider with `vision_provider`."
-    ))
+    )))
 }
 
 fn enforce_mvp_embedding_allowlist(resolved: &str) -> String {
@@ -294,17 +294,17 @@ pub fn effective_vision_model_id(config: &impl LocalModelConfig) -> String {
 /// - **nothing configured** — say what to set and which models to pull;
 /// - **configured but chat-only** — name the offending model, because "pull
 ///   `moondream:…`" is a non-sequitur to someone who configured `gemma3:1b`.
-pub fn resolve_vision_model_id(config: &impl LocalModelConfig) -> Result<String, String> {
+pub fn resolve_vision_model_id(config: &impl LocalModelConfig) -> crate::Result<String> {
     let raw = config.local_vision_model_id().trim();
     if raw.is_empty() {
         let suggestions = VISION_MODEL_SUGGESTIONS.join("`, `");
         tracing::warn!("[local_ai] vision request with no vision model configured");
-        return Err(format!(
+        return Err(crate::Error::VisionModelNotConfigured(format!(
             "no local vision model is configured. Set `local_ai.vision_model_id` to a \
              vision-capable model (for example `{suggestions}`) and pull it with \
              `ollama pull <model>`, or route the vision workload to a cloud provider \
              with `vision_provider`."
-        ));
+        )));
     }
     enforce_vision_capability(apply_vision_alias(raw))
 }

@@ -104,3 +104,16 @@ fn codex_hints_are_merged_without_duplicates() {
         ["gpt-5.4", "gpt-5.5", "gpt-5.3-codex-spark", "gpt-5.3-codex"]
     );
 }
+
+#[test]
+fn blank_preferred_identifier_falls_back_to_the_next_usable_field() {
+    let body = serde_json::json!({
+        "data": [
+            { "id": "", "slug": "usable-slug", "name": "display" },
+            { "id": null, "slug": "  ", "name": "usable-name" }
+        ]
+    });
+    let models = parse_models_response(&body).expect("catalog");
+    assert_eq!(models[0].id, "usable-slug");
+    assert_eq!(models[1].id, "usable-name");
+}

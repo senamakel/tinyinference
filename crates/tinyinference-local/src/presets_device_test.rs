@@ -14,11 +14,11 @@ fn test_device(total_ram_gb: u64) -> DeviceProfile {
 
 #[test]
 fn recommend_tier_scales_with_ram() {
-    assert_eq!(recommend_tier(&test_device(1)), ModelTier::Ram2To4Gb);
+    assert_eq!(recommend_tier(&test_device(1)), ModelTier::Ram1Gb);
     assert_eq!(recommend_tier(&test_device(3)), ModelTier::Ram2To4Gb);
-    assert_eq!(recommend_tier(&test_device(4)), ModelTier::Ram2To4Gb);
-    assert_eq!(recommend_tier(&test_device(8)), ModelTier::Ram2To4Gb);
-    assert_eq!(recommend_tier(&test_device(32)), ModelTier::Ram2To4Gb);
+    assert_eq!(recommend_tier(&test_device(4)), ModelTier::Ram4To8Gb);
+    assert_eq!(recommend_tier(&test_device(8)), ModelTier::Ram8To16Gb);
+    assert_eq!(recommend_tier(&test_device(32)), ModelTier::Ram16PlusGb);
 }
 
 #[test]

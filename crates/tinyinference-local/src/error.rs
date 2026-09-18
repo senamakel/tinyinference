@@ -11,6 +11,18 @@ pub enum Error {
     /// A caller supplied an invalid local-runtime identifier or option.
     #[error("invalid local inference input: {0}")]
     InvalidInput(String),
+    /// No local vision model was configured for a vision request.
+    #[error("no local vision model is configured: {0}")]
+    VisionModelNotConfigured(String),
+    /// The configured model cannot accept image input.
+    #[error("configured model is not vision-capable: {0}")]
+    VisionModelUnsupported(String),
+    /// A local-runtime ownership marker could not be serialized.
+    #[error("spawn marker serialization error: {0}")]
+    MarkerSerialization(String),
+    /// A local-runtime ownership marker could not be written atomically.
+    #[error("spawn marker I/O error: {0}")]
+    MarkerIo(String),
     /// Another install for the same engine is already running.
     #[error("local inference install already in progress: {0}")]
     InstallInProgress(String),

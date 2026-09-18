@@ -148,13 +148,11 @@ fn model_info_from_catalog_item(item: &serde_json::Value) -> Option<ModelInfo> {
         });
     }
 
-    let id = item
-        .get("id")
-        .or_else(|| item.get("slug"))
-        .or_else(|| item.get("name"))
-        .and_then(|v| v.as_str())
+    let id = ["id", "slug", "name"]
+        .into_iter()
+        .filter_map(|key| item.get(key).and_then(|value| value.as_str()))
         .map(str::trim)
-        .filter(|id| !id.is_empty())?
+        .find(|id| !id.is_empty())?
         .to_string();
     let owned_by = item
         .get("owned_by")
