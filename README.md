@@ -26,9 +26,9 @@ The workspace provides:
 ## Use
 
 ```rust
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{ChatModel, ModelRequest};
-use tinyinference_core::providers::MockModel;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelRequest};
+use tinyinference_llm::providers::MockModel;
 
 tokio::runtime::Runtime::new().unwrap().block_on(async {
 let model = MockModel::echo();
@@ -42,8 +42,10 @@ assert_eq!(response.text(), "hello");
 
 TinyAgents vendors this repository at `vendor/tinyinference` and re-exports the
 public modules through its historical `tinyagents::harness::*` paths. New code
-can depend on `tinyinference-core` for provider-neutral inference and
-`tinyinference-local` for local runtimes and installers.
+can depend on `tinyinference-llm` for language models,
+`tinyinference-embeddings` for vector generation and retrieval,
+`tinyinference-local` for local runtimes and installers, and
+`tinyinference-core` only for shared infrastructure.
 
 ## Layout
 
@@ -51,9 +53,12 @@ can depend on `tinyinference-core` for provider-neutral inference and
 Cargo.toml
 crates/tinyinference-core/
 └── src/
+    ├── retry_after.rs shared Retry-After parsing and bounded backoff
+    └── sanitize.rs    credential-safe diagnostic formatting
+crates/tinyinference-llm/
+└── src/
     ├── cache/       request fingerprints and response-cache contracts
     ├── catalog/     provider model-catalog types and response parsing
-    ├── embeddings/ embedding clients, vector store, and retriever
     ├── message/    provider-neutral message and content blocks
     ├── model/      ChatModel, request/response, profiles, and streaming
     ├── providers/  mock and OpenAI-compatible transports
@@ -61,6 +66,8 @@ crates/tinyinference-core/
     ├── failure.rs  provider-failure classification and retry hints
     ├── tool.rs     model-visible tool schemas and call/delta shapes
     └── usage/      normalized token accounting
+crates/tinyinference-embeddings/
+└── src/            embedding clients, vector store, and retriever
 crates/tinyinference-local/
 └── src/            device profiling, local runtimes, model selection, and installers
 ```

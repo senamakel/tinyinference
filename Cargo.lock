@@ -1165,17 +1165,39 @@ name = "tinyinference-core"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "httpdate",
+ "url",
+]
+
+[[package]]
+name = "tinyinference-embeddings"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tinyinference-core",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "tinyinference-llm"
+version = "0.2.1"
+dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "hex",
- "httpdate",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror",
+ "tinyinference-core",
  "tokio",
  "tracing",
  "url",
@@ -1199,6 +1221,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tinyinference-core",
+ "tinyinference-llm",
  "tokio",
  "tracing",
  "url",

@@ -126,7 +126,7 @@ fn preset_model_ids_are_fully_qualified() {
 /// fabricated description of an image the model never saw.
 #[test]
 fn preset_vision_models_are_vision_capable() {
-    use tinyinference_core::model::model_id_supports_vision;
+    use tinyinference_llm::model::model_id_supports_vision;
 
     for preset in all_presets() {
         match preset.vision_mode {
@@ -152,7 +152,7 @@ fn preset_vision_models_are_vision_capable() {
 /// tier's `Bundled` vision mode is real rather than nominal.
 #[test]
 fn high_tier_preset_uses_one_multimodal_build_for_chat_and_vision() {
-    use tinyinference_core::model::model_id_supports_vision;
+    use tinyinference_llm::model::model_id_supports_vision;
 
     let preset = preset_for_tier(ModelTier::Ram16PlusGb).expect("16 GB+ preset");
     assert_eq!(preset.chat_model_id, "gemma4:e4b-it-q8_0");

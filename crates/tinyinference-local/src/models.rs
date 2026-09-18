@@ -151,7 +151,7 @@ fn enforce_mvp_chat_allowlist(resolved: &str) -> String {
 /// came about. Both that bug and its replacement failed the same way: they
 /// answered "which model?" with something the user never asked for.
 fn enforce_vision_capability(resolved: &str) -> Result<String, String> {
-    if tinyinference_core::model::model_id_supports_vision(resolved) {
+    if tinyinference_llm::model::model_id_supports_vision(resolved) {
         return Ok(resolved.to_string());
     }
     tracing::warn!(
@@ -279,7 +279,7 @@ pub fn effective_vision_model_id(config: &impl LocalModelConfig) -> String {
         return String::new();
     }
     let resolved = apply_vision_alias(raw);
-    if tinyinference_core::model::model_id_supports_vision(resolved) {
+    if tinyinference_llm::model::model_id_supports_vision(resolved) {
         resolved.to_string()
     } else {
         String::new()
