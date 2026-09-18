@@ -63,6 +63,18 @@ fn all_models_have_valid_dimensions() {
 }
 
 #[test]
+fn effective_local_settings_use_the_selected_models_width() {
+    let (_, model, dimensions) =
+        effective_embedding_settings("managed", "ignored", 1024, Some("all-minilm:latest"));
+    assert_eq!(model, "all-minilm:latest");
+    assert_eq!(dimensions, 384);
+
+    let (_, _, unknown_dimensions) =
+        effective_embedding_settings("managed", "ignored", 1024, Some("custom-model"));
+    assert_eq!(unknown_dimensions, 0);
+}
+
+#[test]
 fn non_embedding_model_reason_rejects_openrouter_free_tier() {
     // TAURI-RUST-9SK — the exact incident id and case/whitespace variants.
     for id in [

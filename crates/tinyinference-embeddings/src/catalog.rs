@@ -6,7 +6,7 @@
 
 use serde::Serialize;
 
-use crate::{DEFAULT_OLLAMA_DIMENSIONS, DEFAULT_OLLAMA_MODEL};
+use crate::{DEFAULT_OLLAMA_MODEL, known_ollama_embedding_dimensions};
 
 #[derive(Debug, Clone, Serialize)]
 /// A supported model and its vector-width presets.
@@ -214,7 +214,8 @@ pub fn effective_embedding_settings(
         } else {
             trimmed.to_string()
         };
-        return ("ollama".to_string(), model, DEFAULT_OLLAMA_DIMENSIONS);
+        let dimensions = known_ollama_embedding_dimensions(&model).unwrap_or(0);
+        return ("ollama".to_string(), model, dimensions);
     }
     (
         configured_provider.to_owned(),

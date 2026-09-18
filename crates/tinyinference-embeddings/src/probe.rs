@@ -69,18 +69,31 @@ pub async fn probe_custom_embeddings(
                 .collect()
         })
         .collect::<Result<Vec<Vec<f32>>, String>>()?;
+    validate_probe_vectors(model, configured_dimensions, &vectors)?;
+    Ok(vectors)
+}
+
+fn validate_probe_vectors(
+    model: &str,
+    configured_dimensions: usize,
+    vectors: &[Vec<f32>],
+) -> Result<(), String> {
+    if vectors.len() != 1 {
+        return Err(format!(
+            "custom embeddings vector count mismatch: expected 1, got {}",
+            vectors.len()
+        ));
+    }
     if model_supports_dimensions(model)
         && configured_dimensions > 0
-        && vectors
-            .iter()
-            .any(|vector| vector.len() != configured_dimensions)
+        && vectors[0].len() != configured_dimensions
     {
         let actual = vectors.first().map(Vec::len).unwrap_or(0);
         return Err(format!(
             "custom embeddings dimension mismatch: expected {configured_dimensions}, got {actual}"
         ));
     }
-    Ok(vectors)
+    Ok(())
 }
 
 fn embeddings_probe_url(endpoint: &str) -> Result<url::Url, String> {
@@ -125,6 +138,13 @@ mod tests {
         assert_eq!(final_probe_dims("text-embedding-3-large", 1024, 3072), 3072);
         assert_eq!(final_probe_dims("bge-m3", 1024, 768), 768);
         assert_eq!(final_probe_dims("bge-m3", 1024, 0), 1024);
+    }
+
+    #[test]
+    fn probe_requires_one_vector_for_its_one_input() {
+        let error = validate_probe_vectors("bge-m3", 1024, &[vec![0.0], vec![1.0]])
+            .expect_err("two vectors must be rejected");
+        assert!(error.contains("expected 1, got 2"));
     }
 }
 
