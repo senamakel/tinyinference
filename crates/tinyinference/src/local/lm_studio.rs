@@ -179,9 +179,8 @@ pub fn host_root_of(v1_base_url: &str) -> &str {
 
 /// Ollama-native `GET /api/tags` URL derived from an OpenAI-compatible base.
 ///
-/// Only used as the one-shot 404 fallback in
-/// [`LocalAiService::list_lm_studio_models`](crate::inference::local::service::LocalAiService):
-/// some runtimes are reachable on an OpenAI-shaped base URL but expose only the
+/// Intended as a one-shot 404 fallback when listing models: some runtimes are
+/// reachable on an OpenAI-shaped base URL but expose only the
 /// Ollama listing (e.g. plain Ollama configured with a `/v1` base). Discovery is
 /// still chosen by provider type first — this is a recovery path, not a probe
 /// order (GH #5055).

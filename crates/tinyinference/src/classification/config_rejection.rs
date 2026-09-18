@@ -294,8 +294,7 @@ pub fn is_provider_config_rejection_message(body: &str) -> bool {
 ///
 /// This is a strict subset of [`is_provider_config_rejection_message`]:
 /// the same phrase already lives in that predicate's list. The narrower
-/// helper exists so the HTTP-layer wrapper
-/// ([`super::ops::is_provider_config_rejection_http`]) can drop its
+/// helper exists so an HTTP-layer wrapper can drop its
 /// `provider != openhuman_backend_model::PROVIDER_LABEL` polarity guard for
 /// this specific body shape — the OpenHuman hosted backend now emits the
 /// same OpenAI-compatible "Model 'X' is not available" wire body in
@@ -303,9 +302,7 @@ pub fn is_provider_config_rejection_message(body: &str) -> bool {
 /// polarity assumption ("only third-party providers speak this dialect")
 /// no longer holds.
 ///
-/// Drops TAURI-RUST-2Z1 (per-attempt) — the aggregate sibling
-/// TAURI-RUST-2Z2 is already covered by the message-only classifier in
-/// [`crate::core::observability::expected_error_kind`].
+/// It lets hosts consistently demote both per-attempt and aggregate forms.
 pub fn is_openai_compatible_unknown_model_message(body: &str) -> bool {
     body.to_ascii_lowercase().contains("/openai/v1/models")
 }

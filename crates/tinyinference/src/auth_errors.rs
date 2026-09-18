@@ -1,23 +1,14 @@
 //! Process-lived registry of BYO provider auth failures (invalid / revoked
 //! API key, HTTP 401 / 403).
 //!
-//! Single source of truth feeding both user-facing surfaces for a rejected
-//! BYO key, so the two can never drift:
-//!   - the **notification center** — a one-shot [`crate::core::bus::
-//!     DomainEvent::ProviderApiKeyRejected`] published the first time a
-//!     provider starts failing, and
-//!   - the **AI-settings provider-error notice** — read live via the
-//!     `openhuman.inference_provider_auth_errors` RPC ([`snapshot`]).
+//! Hosts can use the registry to feed both one-shot notifications and live
+//! provider-error status surfaces without duplicating failure state.
 //!
-//! Entries are recorded at the demote site
-//! ([`provider::ops::http_error::log_byo_provider_auth_failure`](super::provider::ops::http_error::log_byo_provider_auth_failure)) and cleared
-//! when the user updates or removes that provider's key
-//! (`credentials::ops`). The [`record`] latch is what makes the notification
+//! Entries are recorded where a provider auth failure is classified and
+//! cleared when the host updates or removes that provider key. The [`record`]
+//! latch is what makes a notification
 //! fire **once per failure episode** rather than once per retry: the
-//! triggering 401 repeats thousands of times (the memory-summarization loop
-//! re-attempts on every scoring pass — TAURI-RUST-4RC: ~9k events / 6 users),
-//! and an unguarded publish would re-flood the notification center the same
-//! way the raw error flooded Sentry.
+//! triggering 401 can repeat across retries and background work.
 
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};

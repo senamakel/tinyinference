@@ -2,7 +2,7 @@
 //!
 //! The memory tree's embedder (`bge-m3`) is requested with
 //! `num_ctx = 8192` (see
-//! [`tinyinference::embeddings::RECOMMENDED_OLLAMA_CONTEXT_TOKENS`])
+//! [`crate::embeddings::RECOMMENDED_OLLAMA_CONTEXT_TOKENS`])
 //! and the summariser hard-caps its output to fit that 8192-token embed
 //! ceiling. A local model whose native context window is below this floor
 //! silently truncates chunks/summaries and corrupts recall, so we refuse
