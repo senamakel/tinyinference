@@ -377,3 +377,65 @@ async fn openai_rejects_zero_dimensions_before_network() {
     let error = model.embed(&["text".into()]).await.unwrap_err();
     assert!(matches!(error, crate::Error::Validation(_)));
 }
+
+// ── EmbeddingUsage ────────────────────────────────────────────────────────────
+
+#[test]
+fn openai_usage_reads_prompt_tokens() {
+    let value = json!({"data": [], "usage": {"prompt_tokens": 128, "total_tokens": 128}});
+    assert_eq!(
+        super::openai::parse_usage(&value),
+        Some(EmbeddingUsage::new(128))
+    );
+}
+
+#[test]
+fn voyage_usage_falls_back_to_total_tokens() {
+    // Voyage answers on the OpenAI response shape but reports only a total.
+    let value = json!({"data": [], "usage": {"total_tokens": 4096}});
+    assert_eq!(
+        super::openai::parse_usage(&value),
+        Some(EmbeddingUsage::new(4096))
+    );
+}
+
+#[test]
+fn usage_prefers_prompt_tokens_over_total() {
+    let value = json!({"data": [], "usage": {"prompt_tokens": 90, "total_tokens": 100}});
+    assert_eq!(
+        super::openai::parse_usage(&value),
+        Some(EmbeddingUsage::new(90))
+    );
+}
+
+#[test]
+fn absent_or_unusable_usage_reports_none() {
+    // No usage object at all — every provider that omits the field.
+    assert!(super::openai::parse_usage(&json!({"data": []})).is_none());
+    // Present but empty.
+    assert!(super::openai::parse_usage(&json!({"usage": {}})).is_none());
+    // Non-numeric, rather than a silent zero.
+    assert!(super::openai::parse_usage(&json!({"usage": {"prompt_tokens": "128"}})).is_none());
+    // Zero is indistinguishable from unpopulated, so it is not a measurement.
+    assert!(super::openai::parse_usage(&json!({"usage": {"prompt_tokens": 0}})).is_none());
+}
+
+#[tokio::test]
+async fn default_embed_with_usage_reports_no_usage() {
+    // A model that does not override the method still answers, and says
+    // nothing about cost rather than claiming zero.
+    let (vectors, usage) = ShortEmbeddingModel
+        .embed_with_usage(&["hello".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(vectors, vec![vec![1.0, 0.0]]);
+    assert!(usage.is_none());
+}
+
+#[tokio::test]
+async fn empty_batch_reports_no_usage() {
+    let model = OpenAiEmbeddingModel::new("key").with_base_url("http://127.0.0.1:1");
+    let (vectors, usage) = model.embed_with_usage(&[]).await.unwrap();
+    assert!(vectors.is_empty());
+    assert!(usage.is_none());
+}

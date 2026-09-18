@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use super::EmbeddingModel;
 use super::retry_after::{MAX_RETRIES, backoff_ms_for_attempt};
+use super::{EmbeddingModel, EmbeddingUsage};
 use crate::{Error, Result};
 
 /// Default OpenAI embedding model id.
@@ -162,19 +162,19 @@ impl OpenAiEmbeddingModel {
     }
 }
 
-#[async_trait]
-impl EmbeddingModel for OpenAiEmbeddingModel {
-    fn name(&self) -> &str {
-        "openai"
-    }
-
-    fn model_id(&self) -> &str {
-        &self.model
-    }
-
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+impl OpenAiEmbeddingModel {
+    /// One embeddings request: the vectors, and the provider's token
+    /// accounting when the response carried any.
+    ///
+    /// The single request path behind both [`EmbeddingModel::embed`] and
+    /// [`EmbeddingModel::embed_with_usage`], so asking for usage cannot cost a
+    /// second round trip and the two entry points cannot drift.
+    async fn embed_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
         if texts.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
         if self.dimensions == 0 {
             return Err(Error::Validation(
@@ -242,12 +242,57 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
         }
 
         let value: Value = serde_json::from_str(&text)?;
-        parse_vectors(&value, texts.len(), self.dimensions)
+        let vectors = parse_vectors(&value, texts.len(), self.dimensions)?;
+        Ok((vectors, parse_usage(&value)))
+    }
+}
+
+#[async_trait]
+impl EmbeddingModel for OpenAiEmbeddingModel {
+    fn name(&self) -> &str {
+        "openai"
+    }
+
+    fn model_id(&self) -> &str {
+        &self.model
+    }
+
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let (vectors, _usage) = self.embed_batch(texts).await?;
+        Ok(vectors)
+    }
+
+    async fn embed_with_usage(
+        &self,
+        texts: &[String],
+    ) -> Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
+        self.embed_batch(texts).await
     }
 
     fn dimensions(&self) -> usize {
         self.dimensions
     }
+}
+
+/// The provider's token accounting for one embeddings response.
+///
+/// OpenAI reports `usage.prompt_tokens`; Voyage, on the same response shape,
+/// reports only `usage.total_tokens`. Either is read, preferring
+/// `prompt_tokens` where both appear, because that is the input count the
+/// billing is stated in and embeddings produce no completion tokens for the
+/// two to differ over.
+///
+/// `None` for a response with no usage object, a non-numeric field, or a zero
+/// count — a provider that billed nothing has reported nothing worth pricing,
+/// and passing zero on would be indistinguishable from a real measurement of
+/// zero.
+pub(super) fn parse_usage(value: &Value) -> Option<EmbeddingUsage> {
+    let usage = value.get("usage")?;
+    let tokens = usage
+        .get("prompt_tokens")
+        .or_else(|| usage.get("total_tokens"))
+        .and_then(Value::as_u64)?;
+    (tokens > 0).then(|| EmbeddingUsage::new(tokens))
 }
 
 pub(super) fn parse_vectors(
