@@ -325,7 +325,12 @@ pub fn recover_tool_calls(mut response: ModelResponse, tools: &[ToolSchema]) -> 
 /// Rebuilds a content vector keeping every non-text block in place and
 /// substituting one cleaned text at the position of the first text block.
 /// An empty `cleaned` emits no text block at all.
-fn replace_text_blocks(content: Vec<ContentBlock>, cleaned: String) -> Vec<ContentBlock> {
+///
+/// Public so a host with its own tool-call recovery (one that mints its own
+/// call ids, say) rewrites the visible text exactly as [`recover_tool_calls`]
+/// does instead of carrying a copy.
+#[must_use]
+pub fn replace_text_blocks(content: Vec<ContentBlock>, cleaned: String) -> Vec<ContentBlock> {
     let mut out = Vec::with_capacity(content.len());
     let mut inserted = false;
     for block in content {
