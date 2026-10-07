@@ -278,6 +278,13 @@ fn plain_password_assignment_is_redacted() {
 }
 
 #[test]
+fn alphabetic_password_assignment_is_redacted() {
+    let out = scrub_credentials("password=correcthorse");
+    assert_eq!(out, "password=corr*[REDACTED]");
+    assert!(!out.contains("correcthorse"));
+}
+
+#[test]
 fn member_access_on_a_literal_is_code_but_a_full_stop_is_not() {
     assert_unchanged(r#"token = "<pad>".strip()"#);
     assert_unchanged(r#"secret = "abc123def".encode("utf-8")"#);

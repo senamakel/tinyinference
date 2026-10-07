@@ -105,10 +105,10 @@ pub fn scrub_secret_patterns(input: &str) -> String {
 /// [`scrub_credentials`] drops `==` comparisons and asks [`looks_like_secret`]
 /// whether the value is a credential or ordinary code.
 ///
-/// Groups: 1 = operator, 2 = double-quoted value, 3 = single-quoted value,
-/// 4 = bare value.
+/// Groups: `key` = sensitive key, 2 = operator, 3 = double-quoted value,
+/// 4 = single-quoted value, 5 = bare value.
 static SENSITIVE_KV_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)\b[a-z0-9_\-]*(?:token|api[_-]?key|password|secret|user[_-]?key|bearer|credential)["']?[ \t]*(:=|==|[:=])[ \t]*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([a-zA-Z0-9_+./=\-]+))"#).unwrap()
+    Regex::new(r#"(?i)\b(?P<key>[a-z0-9_\-]*(?:token|api[_-]?key|password|secret|user[_-]?key|bearer|credential))["']?[ \t]*(:=|==|[:=])[ \t]*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([a-zA-Z0-9_+./=\-]+))"#).unwrap()
 });
 
 /// Value prefixes issued by credential providers. A labelled value starting
@@ -152,7 +152,7 @@ fn has_known_secret_prefix(value: &str) -> bool {
 ///
 /// `quoted` says whether the value was a string literal; `rest` is the text
 /// right after the whole match (closing quote included).
-fn looks_like_secret(value: &str, quoted: bool, rest: &str) -> bool {
+fn looks_like_secret(value: &str, quoted: bool, rest: &str, key: &str) -> bool {
     if has_known_secret_prefix(value) {
         return true;
     }
@@ -179,9 +179,11 @@ fn looks_like_secret(value: &str, quoted: bool, rest: &str) -> bool {
         }
         _ => {}
     }
-    // A string literal is data, so `"short"` stays redacted; a bare word with
-    // no digit is a reference (`None`, `self.vocab`, `api_key`).
-    quoted || !DIGITLESS_IDENTIFIER_REGEX.is_match(value)
+    // A string literal is data, so `"short"` stays redacted. A bare word that
+    // is exactly the sensitive key is a common source-code reference
+    // (`api_key=api_key`); other identifier-shaped values under a sensitive
+    // key, including `password=correcthorse`, are data and must be redacted.
+    quoted || !DIGITLESS_IDENTIFIER_REGEX.is_match(value) || !value.eq_ignore_ascii_case(key)
 }
 
 /// Bare AWS access-key IDs — `AKIA…`/`ASIA…` followed by 16 base32 chars — which
@@ -256,17 +258,32 @@ pub fn scrub_credentials(input: &str) -> String {
     let stage_kv = SENSITIVE_KV_REGEX.replace_all(input, |caps: &regex::Captures<'_>| {
         let full_match = &caps[0];
         // `token == other` compares; it does not assign.
-        if &caps[1] == "==" {
+        if &caps[2] == "==" {
             return full_match.to_string();
         }
-        let quoted = caps.get(4).is_none();
+        let quoted = caps.get(5).is_none();
         let value = caps
-            .get(2)
-            .or(caps.get(3))
+            .get(3)
             .or(caps.get(4))
+            .or(caps.get(5))
             .expect("sensitive key-value match has a value");
         let rest = &input[caps.get(0).expect("full match").end()..];
-        if !looks_like_secret(value.as_str(), quoted, rest) {
+        let key = caps.name("key").expect("sensitive key capture");
+        // `api_key: String` is a type annotation, not a credential
+        // assignment. Uppercase type names make this unambiguous while
+        // lowercase alphabetic values such as `password: correcthorse`
+        // remain protected.
+        if &caps[2] == ":"
+            && value
+                .as_str()
+                .chars()
+                .next()
+                .is_some_and(char::is_uppercase)
+            && DIGITLESS_IDENTIFIER_REGEX.is_match(value.as_str())
+        {
+            return full_match.to_string();
+        }
+        if !looks_like_secret(value.as_str(), quoted, rest, key.as_str()) {
             return full_match.to_string();
         }
         // Already redacted: an unquoted value stops at `*`, so a second pass
