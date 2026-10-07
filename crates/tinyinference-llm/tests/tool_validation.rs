@@ -31,8 +31,14 @@ fn json_values_are_validated_against_the_structural_subset() {
         (json!({"tags": []}), "v.score is required"),
         (json!({"score": "3"}), "v.score must be integer, got string"),
         (json!({"score": 1, "extra": 1}), "v.extra is not allowed"),
-        (json!({"score": 1, "tags": [1]}), "v.tags[0] must be string, got integer"),
-        (json!({"score": 1, "mode": "medium"}), "v.mode must be one of the declared enum values"),
+        (
+            json!({"score": 1, "tags": [1]}),
+            "v.tags[0] must be string, got integer",
+        ),
+        (
+            json!({"score": 1, "mode": "medium"}),
+            "v.mode must be one of the declared enum values",
+        ),
     ];
     for (value, message) in cases {
         let error = validate_json_value(&schema, &value, "v").unwrap_err();
@@ -41,12 +47,20 @@ fn json_values_are_validated_against_the_structural_subset() {
 
     let untyped = json!({"required": ["id"]});
     let error = validate_json_value(&untyped, &json!(5), "v").unwrap_err();
-    assert!(error.to_string().contains("v must be an object with the declared fields, got integer"));
+    assert!(
+        error
+            .to_string()
+            .contains("v must be an object with the declared fields, got integer")
+    );
 
     let union = json!({"type": ["string", "null"]});
     assert!(validate_json_value(&union, &json!(null), "v").is_ok());
     let error = validate_json_value(&union, &json!(1), "v").unwrap_err();
-    assert!(error.to_string().contains("v must be one of string, null, got integer"));
+    assert!(
+        error
+            .to_string()
+            .contains("v must be one of string, null, got integer")
+    );
 
     assert!(validate_json_value(&json!({}), &json!(1), "v").is_ok());
     assert!(validate_json_value(&json!({"type": "uuid"}), &json!(1), "v").is_ok());
@@ -70,13 +84,25 @@ fn replacing_text_blocks_keeps_other_blocks_in_place() {
     use tinyinference_llm::prompt_tools::replace_text_blocks;
 
     let content = vec![
+        ContentBlock::Json(json!(1)),
         ContentBlock::Text("raw <tool>".into()),
+        ContentBlock::Json(json!(2)),
         ContentBlock::Text("more".into()),
     ];
     assert_eq!(
         replace_text_blocks(content, "clean".into()),
-        vec![ContentBlock::Text("clean".into())]
+        vec![
+            ContentBlock::Json(json!(1)),
+            ContentBlock::Text("clean".into()),
+            ContentBlock::Json(json!(2)),
+        ]
     );
-    assert_eq!(replace_text_blocks(vec![], "only".into()), vec![ContentBlock::Text("only".into())]);
-    assert_eq!(replace_text_blocks(vec![ContentBlock::Text("x".into())], String::new()), vec![]);
+    assert_eq!(
+        replace_text_blocks(vec![], "only".into()),
+        vec![ContentBlock::Text("only".into())]
+    );
+    assert_eq!(
+        replace_text_blocks(vec![ContentBlock::Text("x".into())], String::new()),
+        vec![]
+    );
 }
