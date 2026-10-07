@@ -80,7 +80,12 @@ fn fnv1a_hex(data: &[u8]) -> String {
 
 /// Recursively sorts the keys of every JSON object so that the serialized form
 /// is canonical regardless of insertion order.
-fn canonical_value(v: Value) -> Value {
+///
+/// Public so every cache key derived from JSON — this crate's and a host's —
+/// canonicalizes the same way; two copies that drifted would make equal
+/// requests hash apart.
+#[must_use]
+pub fn canonical_value(v: Value) -> Value {
     match v {
         Value::Object(map) => {
             let mut pairs: Vec<(String, Value)> = map.into_iter().collect();
