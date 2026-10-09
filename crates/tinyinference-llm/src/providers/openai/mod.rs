@@ -93,7 +93,7 @@ mod transport;
 
 pub use config::{
     OpenAiConfig, build_local_runtime_chat_model, build_openai_chat_model, build_openai_model,
-    endpoint_is_openrouter,
+    build_openai_model_with_http, endpoint_is_openrouter,
 };
 pub use local::{
     CONTEXT_OVERFLOW_CODE, LocalProbe, LocalRuntimeKind, is_chat_template_rejection_message,

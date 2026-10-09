@@ -7,6 +7,7 @@ use serde_json::json;
 use crate::model::ChatModel;
 
 use super::{AuthStyle, OpenAiModel};
+use crate::providers::ProviderRequestOptions;
 
 /// Resolved configuration for an OpenAI-compatible provider.
 #[derive(Clone)]
@@ -101,7 +102,18 @@ pub fn endpoint_is_openrouter(endpoint: &str) -> bool {
 
 /// Builds an OpenAI-compatible chat model from fully resolved configuration.
 pub fn build_openai_model(config: OpenAiConfig<'_>) -> Arc<dyn ChatModel<()>> {
-    build_openai_model_with(config, true)
+    build_openai_model_with(config, true, None)
+}
+
+/// Build an OpenAI-compatible model with a host-configured HTTP client.
+///
+/// Hosts use this for endpoint-specific TLS roots and proxy policy while
+/// retaining the same model settings as [`build_openai_model`].
+pub fn build_openai_model_with_http(
+    config: OpenAiConfig<'_>,
+    http: reqwest::Client,
+) -> Arc<dyn ChatModel<()>> {
+    build_openai_model_with(config, true, Some(http))
 }
 
 /// [`build_openai_model`] with the Anthropic-model `cache_control` default made
@@ -109,6 +121,7 @@ pub fn build_openai_model(config: OpenAiConfig<'_>) -> Arc<dyn ChatModel<()>> {
 fn build_openai_model_with(
     config: OpenAiConfig<'_>,
     anthropic_cache_control: bool,
+    http: Option<reqwest::Client>,
 ) -> Arc<dyn ChatModel<()>> {
     let mut model = OpenAiModel::compatible_provider(
         config.provider_name,
@@ -118,6 +131,13 @@ fn build_openai_model_with(
     )
     .with_auth_style(config.auth_style)
     .with_anthropic_cache_control(anthropic_cache_control);
+
+    if let Some(http) = http {
+        model = model.with_request_options(ProviderRequestOptions {
+            http: Some(http),
+            ..ProviderRequestOptions::default()
+        });
+    }
 
     if !config.temperature_unsupported_models.is_empty() {
         model = model
@@ -231,5 +251,6 @@ pub fn build_local_runtime_chat_model(
             explicit_cache_control: false,
         },
         false,
+        None,
     )
 }
