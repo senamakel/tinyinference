@@ -436,3 +436,200 @@ async fn partial_listing_fills_missing_limits_and_retains_facts_if_probe_unavail
     assert_eq!(result.input_modalities, Some(vec!["text".into()]));
     assert_eq!(fetcher.calls().len(), 1);
 }
+
+// ── Ollama native `/api/show` discovery, against a real HTTP server ──────────
+
+/// A minimal HTTP/1.1 server: answers `GET /v1/models` with an Ollama-style
+/// listing (no window) and `POST /api/show` with a canned body, counting hits.
+struct MockOllama {
+    base: String,
+    show_hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    show_bodies: std::sync::Arc<Mutex<Vec<String>>>,
+}
+
+async fn mock_ollama(show_status: u16, show_reply: Value, show_delay: Duration) -> MockOllama {
+    use std::sync::atomic::Ordering;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let show_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let show_bodies = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let (hits, bodies) = (show_hits.clone(), show_bodies.clone());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let (hits, bodies, reply) = (hits.clone(), bodies.clone(), show_reply.clone());
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let n = socket.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                        continue;
+                    };
+                    let length = head
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if body.len() < length {
+                        continue;
+                    }
+                    let request_line = head.lines().next().unwrap_or_default().to_string();
+                    let (status, payload) = if request_line.starts_with("GET /v1/models/") {
+                        (404, json!({}))
+                    } else if request_line.starts_with("GET /v1/models") {
+                        (
+                            200,
+                            json!({"object":"list","data":[{"id":"qwen3:14b","object":"model","owned_by":"library"}]}),
+                        )
+                    } else if request_line.starts_with("POST /api/show") {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        bodies.lock().unwrap().push(body.to_string());
+                        if !show_delay.is_zero() {
+                            tokio::time::sleep(show_delay).await;
+                        }
+                        (show_status, reply)
+                    } else {
+                        (404, json!({}))
+                    };
+                    let payload = payload.to_string();
+                    let response = format!(
+                        "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+                        payload.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                    return;
+                }
+            });
+        }
+    });
+    MockOllama {
+        base,
+        show_hits,
+        show_bodies,
+    }
+}
+
+fn show_body() -> Value {
+    json!({
+        "model_info": { "general.architecture": "qwen3", "qwen3.context_length": 40960 },
+        "capabilities": ["completion", "tools"]
+    })
+}
+
+#[tokio::test]
+async fn ollama_show_supplies_the_window_the_v1_listing_lacks() {
+    let server = mock_ollama(200, show_body(), Duration::ZERO).await;
+    // Custom OpenAI-compatible provider pointed at `<root>/v1`; forced on
+    // because the mock's port is not 11434.
+    let request =
+        DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b").with_ollama_native(true);
+    let cache = ModelLimitsCache::default();
+    let limits = discover_model_limits_with(&ReqwestListingFetcher::default(), &cache, &request)
+        .await
+        .expect("limits");
+    assert_eq!(limits.context_window, Some(40_960));
+    assert_eq!(limits.source, LimitSource::NativeApi);
+    assert_eq!(
+        server.show_bodies.lock().unwrap().as_slice(),
+        [r#"{"model":"qwen3:14b"}"#]
+    );
+}
+
+#[tokio::test]
+async fn ollama_num_ctx_parameter_beats_the_architecture_window() {
+    let mut body = show_body();
+    body["parameters"] = json!("num_ctx                        16384\nstop \"<|im_end|>\"");
+    let server = mock_ollama(200, body, Duration::ZERO).await;
+    let request =
+        DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b").with_ollama_native(true);
+    let limits = discover_model_limits_with(
+        &ReqwestListingFetcher::default(),
+        &ModelLimitsCache::default(),
+        &request,
+    )
+    .await
+    .unwrap();
+    assert_eq!(limits.context_window, Some(16_384));
+}
+
+#[tokio::test]
+async fn ollama_probe_is_off_when_disabled() {
+    let server = mock_ollama(200, show_body(), Duration::ZERO).await;
+    let request =
+        DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b").with_ollama_native(false);
+    let limits = discover_model_limits_with(
+        &ReqwestListingFetcher::default(),
+        &ModelLimitsCache::default(),
+        &request,
+    )
+    .await;
+    assert!(limits.and_then(|l| l.context_window).is_none());
+    assert_eq!(
+        server.show_hits.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[tokio::test]
+async fn failed_ollama_probe_is_cached_and_not_retried() {
+    let server = mock_ollama(500, json!({}), Duration::ZERO).await;
+    let request =
+        DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b").with_ollama_native(true);
+    let cache = ModelLimitsCache::default();
+    let fetcher = ReqwestListingFetcher::default();
+    for _ in 0..3 {
+        let limits = discover_model_limits_with(&fetcher, &cache, &request).await;
+        assert!(limits.and_then(|l| l.context_window).is_none());
+    }
+    assert_eq!(
+        server.show_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[tokio::test]
+async fn hanging_ollama_probe_is_bounded_by_the_timeout() {
+    let server = mock_ollama(200, show_body(), Duration::from_secs(30)).await;
+    let request = DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b")
+        .with_ollama_native(true)
+        .with_timeout(Duration::from_millis(300));
+    let cache = ModelLimitsCache::default();
+    let started = std::time::Instant::now();
+    let limits =
+        discover_model_limits_with(&ReqwestListingFetcher::default(), &cache, &request).await;
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(limits.and_then(|l| l.context_window).is_none());
+    // The timeout is remembered: no second hit.
+    discover_model_limits_with(&ReqwestListingFetcher::default(), &cache, &request).await;
+    assert_eq!(
+        server.show_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[test]
+fn ollama_endpoints_are_detected_from_the_url() {
+    for yes in [
+        "http://127.0.0.1:11434/v1",
+        "http://localhost:11434",
+        "https://ollama.internal/v1",
+    ] {
+        assert!(crate::model::discover::looks_like_ollama(yes), "{yes}");
+    }
+    for no in ["https://openrouter.ai/api/v1", "http://localhost:1234/v1"] {
+        assert!(!crate::model::discover::looks_like_ollama(no), "{no}");
+    }
+}
