@@ -809,7 +809,7 @@ impl OpenAiModel {
 
         let response = self
             .send_checked(
-                self.authorized(self.client.get(&url)).await?,
+                self.authorized(self.http_client().get(&url)).await?,
                 "request",
                 &url,
             )
@@ -1054,14 +1054,14 @@ impl OpenAiModel {
             LocalRuntimeKind::Ollama => {
                 let endpoint = format!("{root}/api/show");
                 let builder = self
-                    .authorized(self.client.post(&endpoint))
+                    .authorized(self.http_client().post(&endpoint))
                     .await?
                     .json(&ollama_show_body(&self.model));
                 (endpoint, builder)
             }
             LocalRuntimeKind::LmStudio => {
                 let endpoint = format!("{root}/api/v0/models");
-                let builder = self.authorized(self.client.get(&endpoint)).await?;
+                let builder = self.authorized(self.http_client().get(&endpoint)).await?;
                 (endpoint, builder)
             }
             LocalRuntimeKind::LlamaCpp | LocalRuntimeKind::Vllm => return Ok(LocalProbe::default()),
@@ -1144,7 +1144,7 @@ impl OpenAiModel {
             local_options_object(&self.default_provider_options),
             self.keep_alive.as_deref(),
         );
-        self.authorized(self.client.post(&url))
+        self.authorized(self.http_client().post(&url))
             .await?
             .json(&body)
             .send()
@@ -1629,7 +1629,10 @@ impl OpenAiModel {
         timeout_ms: Option<u64>,
         url: &str,
     ) -> Result<reqwest::Response> {
-        let mut builder = self.authorized(self.client.post(url)).await?.json(body);
+        let mut builder = self
+            .authorized(self.http_client().post(url))
+            .await?
+            .json(body);
         if let Some(timeout) = request_timeout(timeout_ms, body.stream == Some(true)) {
             builder = builder.timeout(timeout);
         }
@@ -1702,12 +1705,16 @@ impl OpenAiModel {
     ) -> Result<reqwest::Response> {
         crate::network_guard::ensure_network_models_allowed()?;
         let url = format!("{}/chat/completions", self.base_url);
-        let client = self.request_options.http.as_ref().unwrap_or(&self.client);
+        let client = self.http_client();
         let mut builder = self.authorized(client.post(&url)).await?.json(payload);
         if let Some(timeout) = request_timeout(timeout_ms, streaming) {
             builder = builder.timeout(timeout);
         }
         self.send_checked(builder, what, &url).await
+    }
+
+    fn http_client(&self) -> &reqwest::Client {
+        self.request_options.http.as_ref().unwrap_or(&self.client)
     }
 
     /// Serializes `body` into the JSON actually sent: parameters this endpoint
