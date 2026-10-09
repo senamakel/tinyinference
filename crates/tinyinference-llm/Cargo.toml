@@ -24,7 +24,7 @@ tinyinference-core = { version = "0.3.0", path = "../tinyinference-core" }
 # The model-facing tool protocol: prompt-guided rendering, text-mode parsing,
 # argument repair, and streaming scrub. Owned once, in TinyTools, so this
 # adapter and every host share one grammar table.
-tinytools-agent = { version = "0.5.0", git = "https://github.com/tinyhumansai/tinytools", rev = "8feb5571e52baa145b5c7c473b16cd59de2b103a" }
+tinytools-agent = { version = "0.5.0", git = "https://github.com/tinyhumansai/tinytools", rev = "bd60b9b52f1998b4483b9cf107a72d3338e672f8" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
