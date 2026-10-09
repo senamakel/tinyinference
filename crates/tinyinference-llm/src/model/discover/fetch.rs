@@ -88,6 +88,23 @@ impl ReqwestListingFetcher {
     pub fn new(client: reqwest::Client) -> Self {
         Self { client }
     }
+
+    async fn send(&self, builder: reqwest::RequestBuilder, shown: &str) -> crate::Result<Value> {
+        let response = builder.send().await.map_err(|error| {
+            // reqwest errors embed the full URL; strip it, we add a redacted one.
+            crate::Error::Catalog(format!("{shown} failed: {}", error.without_url()))
+        })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(crate::Error::Catalog(format!(
+                "{shown} returned {}",
+                status.as_u16()
+            )));
+        }
+        response.json::<Value>().await.map_err(|error| {
+            crate::Error::Catalog(format!("{shown} body: {}", error.without_url()))
+        })
+    }
 }
 
 #[async_trait]
