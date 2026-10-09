@@ -33,9 +33,10 @@ pub use fetch::{
 };
 pub use parse::{
     input_modalities_from_entry, limits_from_entry, model_ids_match, parse_listing_limits,
-    parse_model_limits, parse_openrouter_endpoint_limits, pinned_openrouter_providers,
+    parse_model_limits, parse_ollama_show, parse_openrouter_endpoint_limits,
+    pinned_openrouter_providers,
 };
-pub use types::{DiscoveryRequest, LimitSource, ModelLimits};
+pub use types::{DiscoveryRequest, LimitSource, ModelLimits, looks_like_ollama};
 
 /// The provider-sourced limits already cached for `(endpoint, model)`, without
 /// any request: a fresh default-variant discovery, lowered by a learned overflow

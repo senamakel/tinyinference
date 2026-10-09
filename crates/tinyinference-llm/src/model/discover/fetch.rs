@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use super::cache::{ModelLimitsCache, model_limits_cache};
 use super::parse::{
-    model_ids_match, parse_listing_limits, parse_model_limits, parse_openrouter_endpoint_limits,
+    model_ids_match, parse_listing_limits, parse_model_limits, parse_ollama_show,
+    parse_openrouter_endpoint_limits,
 };
 use super::types::{DiscoveryRequest, ModelLimits};
 
@@ -21,6 +22,27 @@ pub trait ModelListingFetcher: Send + Sync {
     /// status, or a body that is not JSON. Discovery treats any error as
     /// "nothing found here" and moves on.
     async fn get_json(&self, url: &str, headers: &[(String, String)]) -> crate::Result<Value>;
+
+    /// `POST url` with a JSON `body` and `headers`, decoded as JSON. Used for
+    /// native APIs that have no GET form (Ollama's `/api/show`).
+    ///
+    /// The default reports "unsupported", which discovery treats like any
+    /// other failed lookup.
+    ///
+    /// # Errors
+    ///
+    /// Same contract as [`Self::get_json`].
+    async fn post_json(
+        &self,
+        url: &str,
+        _headers: &[(String, String)],
+        _body: &Value,
+    ) -> crate::Result<Value> {
+        Err(crate::Error::Catalog(format!(
+            "POST {} unsupported by this fetcher",
+            redact_url(url)
+        )))
+    }
 }
 
 /// `url` without userinfo, query and fragment, safe for errors and logs (a
@@ -76,25 +98,31 @@ impl ModelListingFetcher for ReqwestListingFetcher {
                 "network-backed model calls are denied for this process".to_string(),
             ));
         }
-        let shown = redact_url(url);
+        let shown = format!("GET {}", redact_url(url));
         let mut builder = self.client.get(url);
         for (name, value) in headers {
             builder = builder.header(name.as_str(), value.as_str());
         }
-        let response = builder.send().await.map_err(|error| {
-            // reqwest errors embed the full URL; strip it, we add a redacted one.
-            crate::Error::Catalog(format!("GET {shown} failed: {}", error.without_url()))
-        })?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(crate::Error::Catalog(format!(
-                "GET {shown} returned {}",
-                status.as_u16()
-            )));
+        self.send(builder, &shown).await
+    }
+
+    async fn post_json(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &Value,
+    ) -> crate::Result<Value> {
+        if crate::network_models_denied() {
+            return Err(crate::Error::Catalog(
+                "network-backed model calls are denied for this process".to_string(),
+            ));
         }
-        response.json::<Value>().await.map_err(|error| {
-            crate::Error::Catalog(format!("GET {shown} body: {}", error.without_url()))
-        })
+        let shown = format!("POST {}", redact_url(url));
+        let mut builder = self.client.post(url).json(body);
+        for (name, value) in headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        self.send(builder, &shown).await
     }
 }
 
@@ -236,6 +264,40 @@ async fn fetch_limits(
                 model = %request.model,
                 error = %error,
                 "[model_limits] single-model record unavailable"
+            ),
+        }
+    }
+
+    if found
+        .as_ref()
+        .is_none_or(|limits| limits.context_window.is_none())
+        && request.ollama_native_enabled()
+    {
+        let url = request.ollama_show_url();
+        let body = serde_json::json!({ "model": request.model });
+        match fetcher.post_json(&url, &request.headers, &body).await {
+            Ok(reply) => {
+                if let Some(native) = parse_ollama_show(&reply) {
+                    tracing::debug!(
+                        endpoint = %request.endpoint,
+                        model = %request.model,
+                        context_window = ?native.context_window,
+                        "[model_limits] context window from Ollama /api/show"
+                    );
+                    found = Some(match found {
+                        Some(mut listed) => {
+                            listed.context_window = native.context_window;
+                            listed
+                        }
+                        None => native,
+                    });
+                }
+            }
+            Err(error) => tracing::debug!(
+                endpoint = %request.endpoint,
+                model = %request.model,
+                error = %error,
+                "[model_limits] Ollama /api/show unavailable"
             ),
         }
     }

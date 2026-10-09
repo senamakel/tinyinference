@@ -102,6 +102,47 @@ pub fn limits_from_entry(item: &Value) -> Option<ModelLimits> {
     (!limits.is_empty()).then_some(limits)
 }
 
+/// The window an Ollama `POST /api/show` body reports.
+///
+/// A `num_ctx` in the model's `parameters` text (the Modelfile setting the
+/// server loads it with) is the real ceiling for a request, so it wins; else
+/// the architecture's `*.context_length` from `model_info`. Overstating the
+/// window would stop compaction from firing, so with several candidates the
+/// smallest is used.
+#[must_use]
+pub fn parse_ollama_show(body: &Value) -> Option<ModelLimits> {
+    let num_ctx = body
+        .get("parameters")
+        .and_then(Value::as_str)
+        .and_then(|parameters| {
+            parameters.lines().find_map(|line| {
+                let mut parts = line.split_whitespace();
+                (parts.next() == Some("num_ctx"))
+                    .then(|| parts.next().and_then(|value| value.parse::<u64>().ok()))
+                    .flatten()
+            })
+        })
+        .filter(|value| *value > 0);
+    let architecture = body
+        .get("model_info")
+        .and_then(Value::as_object)
+        .and_then(|info| {
+            info.iter()
+                .filter(|(key, _)| {
+                    key.ends_with(".context_length") || key.as_str() == "context_length"
+                })
+                .filter_map(|(_, value)| positive_u64(value))
+                .min()
+        });
+    let context_window = num_ctx.or(architecture)?;
+    Some(ModelLimits {
+        context_window: Some(context_window),
+        max_output_tokens: None,
+        input_modalities: None,
+        source: LimitSource::NativeApi,
+    })
+}
+
 /// Strips one leading routing segment (`openrouter/deepseek/x` → `deepseek/x`).
 fn without_route_prefix(id: &str) -> Option<&str> {
     id.split_once('/')
