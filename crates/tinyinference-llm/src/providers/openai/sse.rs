@@ -793,3 +793,7 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sse_tests.rs"]
+mod tests;
