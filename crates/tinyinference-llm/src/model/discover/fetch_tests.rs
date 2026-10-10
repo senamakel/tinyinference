@@ -17,12 +17,25 @@ struct FakeFetcher {
     routes: HashMap<String, Value>,
     calls: Mutex<Vec<(String, Vec<String>)>>,
     hang: bool,
+    /// Canned `POST` replies per URL (`Err` carries a status to report).
+    post_routes: HashMap<String, std::result::Result<Value, u16>>,
+    post_hang: bool,
+    post_bodies: Mutex<Vec<Value>>,
 }
 
 impl FakeFetcher {
     fn with(mut self, url: &str, body: Value) -> Self {
         self.routes.insert(url.to_string(), body);
         self
+    }
+
+    fn with_post(mut self, url: &str, reply: std::result::Result<Value, u16>) -> Self {
+        self.post_routes.insert(url.to_string(), reply);
+        self
+    }
+
+    fn post_hits(&self) -> usize {
+        self.post_bodies.lock().unwrap().len()
     }
 
     fn calls(&self) -> Vec<String> {
@@ -49,6 +62,25 @@ impl ModelListingFetcher for FakeFetcher {
             .get(url)
             .cloned()
             .ok_or_else(|| crate::Error::Catalog(format!("GET {url} returned 404")))
+    }
+
+    async fn post_json(
+        &self,
+        url: &str,
+        _headers: &[(String, String)],
+        body: &Value,
+    ) -> crate::Result<Value> {
+        self.post_bodies.lock().unwrap().push(body.clone());
+        if self.post_hang {
+            futures::future::pending::<()>().await;
+        }
+        match self.post_routes.get(url) {
+            Some(Ok(reply)) => Ok(reply.clone()),
+            Some(Err(status)) => Err(crate::Error::Catalog(format!(
+                "POST {url} returned {status}"
+            ))),
+            None => Err(crate::Error::Catalog(format!("POST {url} returned 404"))),
+        }
     }
 }
 
@@ -437,89 +469,24 @@ async fn partial_listing_fills_missing_limits_and_retains_facts_if_probe_unavail
     assert_eq!(fetcher.calls().len(), 1);
 }
 
-// ── Ollama native `/api/show` discovery, against a real HTTP server ──────────
+// ── Ollama native `/api/show` discovery, against an in-memory fetcher ────────
 
-/// A minimal HTTP/1.1 server: answers `GET /v1/models` with an Ollama-style
-/// listing (no window) and `POST /api/show` with a canned body, counting hits.
-struct MockOllama {
-    base: String,
-    show_hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    show_bodies: std::sync::Arc<Mutex<Vec<String>>>,
+const OLLAMA_ROOT: &str = "http://ollama.test";
+const OLLAMA_SHOW: &str = "http://ollama.test/api/show";
+
+/// An Ollama-style `/v1` listing: ids only, no window.
+fn ollama_fetcher(show: std::result::Result<Value, u16>) -> FakeFetcher {
+    FakeFetcher::default()
+        .with(
+            &format!("{OLLAMA_ROOT}/v1/models"),
+            json!({"object":"list","data":[{"id":"qwen3:14b","object":"model","owned_by":"library"}]}),
+        )
+        .with_post(OLLAMA_SHOW, show)
 }
 
-async fn mock_ollama(show_status: u16, show_reply: Value, show_delay: Duration) -> MockOllama {
-    use std::sync::atomic::Ordering;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    let show_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let show_bodies = std::sync::Arc::new(Mutex::new(Vec::new()));
-    let (hits, bodies) = (show_hits.clone(), show_bodies.clone());
-    tokio::spawn(async move {
-        loop {
-            let Ok((mut socket, _)) = listener.accept().await else {
-                return;
-            };
-            let (hits, bodies, reply) = (hits.clone(), bodies.clone(), show_reply.clone());
-            tokio::spawn(async move {
-                let mut buf = Vec::new();
-                let mut chunk = [0u8; 4096];
-                loop {
-                    let n = socket.read(&mut chunk).await.unwrap_or(0);
-                    if n == 0 {
-                        return;
-                    }
-                    buf.extend_from_slice(&chunk[..n]);
-                    let text = String::from_utf8_lossy(&buf).to_string();
-                    let Some((head, body)) = text.split_once("\r\n\r\n") else {
-                        continue;
-                    };
-                    let length = head
-                        .lines()
-                        .find_map(|l| {
-                            l.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-                        })
-                        .unwrap_or(0);
-                    if body.len() < length {
-                        continue;
-                    }
-                    let request_line = head.lines().next().unwrap_or_default().to_string();
-                    let (status, payload) = if request_line.starts_with("GET /v1/models/") {
-                        (404, json!({}))
-                    } else if request_line.starts_with("GET /v1/models") {
-                        (
-                            200,
-                            json!({"object":"list","data":[{"id":"qwen3:14b","object":"model","owned_by":"library"}]}),
-                        )
-                    } else if request_line.starts_with("POST /api/show") {
-                        hits.fetch_add(1, Ordering::SeqCst);
-                        bodies.lock().unwrap().push(body.to_string());
-                        if !show_delay.is_zero() {
-                            tokio::time::sleep(show_delay).await;
-                        }
-                        (show_status, reply)
-                    } else {
-                        (404, json!({}))
-                    };
-                    let payload = payload.to_string();
-                    let response = format!(
-                        "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
-                        payload.len()
-                    );
-                    let _ = socket.write_all(response.as_bytes()).await;
-                    let _ = socket.shutdown().await;
-                    return;
-                }
-            });
-        }
-    });
-    MockOllama {
-        base,
-        show_hits,
-        show_bodies,
-    }
+fn ollama_request() -> DiscoveryRequest {
+    // Forced on because the host name is not an Ollama one.
+    DiscoveryRequest::new(format!("{OLLAMA_ROOT}/v1"), "qwen3:14b").with_ollama_native(true)
 }
 
 fn show_body() -> Value {
@@ -531,93 +498,109 @@ fn show_body() -> Value {
 
 #[tokio::test]
 async fn ollama_show_supplies_the_window_the_v1_listing_lacks() {
-    let server = mock_ollama(200, show_body(), Duration::ZERO).await;
-    // Custom OpenAI-compatible provider pointed at `<root>/v1`; forced on
-    // because the mock's port is not 11434.
-    let request =
-        DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b").with_ollama_native(true);
-    let cache = ModelLimitsCache::default();
-    let limits = discover_model_limits_with(&ReqwestListingFetcher::default(), &cache, &request)
+    let fetcher = ollama_fetcher(Ok(show_body()));
+    let limits = discover_model_limits_with(&fetcher, &cache(), &ollama_request())
         .await
         .expect("limits");
     assert_eq!(limits.context_window, Some(40_960));
     assert_eq!(limits.source, LimitSource::NativeApi);
     assert_eq!(
-        server.show_bodies.lock().unwrap().as_slice(),
-        [r#"{"model":"qwen3:14b"}"#]
+        fetcher.post_bodies.lock().unwrap().as_slice(),
+        [json!({"model":"qwen3:14b"})]
     );
 }
 
 #[tokio::test]
-async fn ollama_num_ctx_parameter_beats_the_architecture_window() {
+async fn ollama_num_ctx_below_the_architecture_window_wins() {
     let mut body = show_body();
     body["parameters"] = json!("num_ctx                        16384\nstop \"<|im_end|>\"");
-    let server = mock_ollama(200, body, Duration::ZERO).await;
-    let request =
-        DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b").with_ollama_native(true);
-    let limits = discover_model_limits_with(
-        &ReqwestListingFetcher::default(),
-        &ModelLimitsCache::default(),
-        &request,
-    )
-    .await
-    .unwrap();
+    let fetcher = ollama_fetcher(Ok(body));
+    let limits = discover_model_limits_with(&fetcher, &cache(), &ollama_request())
+        .await
+        .unwrap();
     assert_eq!(limits.context_window, Some(16_384));
 }
 
 #[tokio::test]
+async fn ollama_num_ctx_above_the_architecture_window_is_capped() {
+    let mut body = show_body();
+    body["parameters"] = json!("num_ctx 100000");
+    let fetcher = ollama_fetcher(Ok(body));
+    let limits = discover_model_limits_with(&fetcher, &cache(), &ollama_request())
+        .await
+        .unwrap();
+    assert_eq!(limits.context_window, Some(40_960));
+}
+
+#[tokio::test]
+async fn ollama_native_window_relabels_a_partial_listing_entry() {
+    let fetcher = FakeFetcher::default()
+        .with(
+            &format!("{OLLAMA_ROOT}/v1/models"),
+            json!({"data":[{"id":"qwen3:14b","top_provider":{"max_completion_tokens":2048}}]}),
+        )
+        .with_post(OLLAMA_SHOW, Ok(show_body()));
+    let limits = discover_model_limits_with(&fetcher, &cache(), &ollama_request())
+        .await
+        .unwrap();
+    assert_eq!(limits.context_window, Some(40_960));
+    assert_eq!(limits.max_output_tokens, Some(2048));
+    assert_eq!(limits.source, LimitSource::NativeApi);
+}
+
+#[tokio::test]
+async fn partial_listing_entry_of_another_model_still_gets_its_own_native_probe() {
+    let fetcher = FakeFetcher::default()
+        .with(
+            &format!("{OLLAMA_ROOT}/v1/models"),
+            json!({"data":[
+                {"id":"qwen3:14b"},
+                {"id":"other:7b","top_provider":{"max_completion_tokens":512}}
+            ]}),
+        )
+        .with_post(OLLAMA_SHOW, Ok(show_body()));
+    let cache = cache();
+    discover_model_limits_with(&fetcher, &cache, &ollama_request()).await;
+    let other =
+        DiscoveryRequest::new(format!("{OLLAMA_ROOT}/v1"), "other:7b").with_ollama_native(true);
+    let limits = discover_model_limits_with(&fetcher, &cache, &other)
+        .await
+        .unwrap();
+    assert_eq!(limits.context_window, Some(40_960));
+    assert_eq!(fetcher.post_hits(), 2);
+}
+
+#[tokio::test]
 async fn ollama_probe_is_off_when_disabled() {
-    let server = mock_ollama(200, show_body(), Duration::ZERO).await;
-    let request =
-        DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b").with_ollama_native(false);
-    let limits = discover_model_limits_with(
-        &ReqwestListingFetcher::default(),
-        &ModelLimitsCache::default(),
-        &request,
-    )
-    .await;
+    let fetcher = ollama_fetcher(Ok(show_body()));
+    let request = ollama_request().with_ollama_native(false);
+    let limits = discover_model_limits_with(&fetcher, &cache(), &request).await;
     assert!(limits.and_then(|l| l.context_window).is_none());
-    assert_eq!(
-        server.show_hits.load(std::sync::atomic::Ordering::SeqCst),
-        0
-    );
+    assert_eq!(fetcher.post_hits(), 0);
 }
 
 #[tokio::test]
 async fn failed_ollama_probe_is_cached_and_not_retried() {
-    let server = mock_ollama(500, json!({}), Duration::ZERO).await;
-    let request =
-        DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b").with_ollama_native(true);
-    let cache = ModelLimitsCache::default();
-    let fetcher = ReqwestListingFetcher::default();
+    let fetcher = ollama_fetcher(Err(500));
+    let cache = cache();
     for _ in 0..3 {
-        let limits = discover_model_limits_with(&fetcher, &cache, &request).await;
+        let limits = discover_model_limits_with(&fetcher, &cache, &ollama_request()).await;
         assert!(limits.and_then(|l| l.context_window).is_none());
     }
-    assert_eq!(
-        server.show_hits.load(std::sync::atomic::Ordering::SeqCst),
-        1
-    );
+    assert_eq!(fetcher.post_hits(), 1);
 }
 
 #[tokio::test]
 async fn hanging_ollama_probe_is_bounded_by_the_timeout() {
-    let server = mock_ollama(200, show_body(), Duration::from_secs(30)).await;
-    let request = DiscoveryRequest::new(format!("{}/v1", server.base), "qwen3:14b")
-        .with_ollama_native(true)
-        .with_timeout(Duration::from_millis(300));
-    let cache = ModelLimitsCache::default();
-    let started = std::time::Instant::now();
-    let limits =
-        discover_model_limits_with(&ReqwestListingFetcher::default(), &cache, &request).await;
-    assert!(started.elapsed() < Duration::from_secs(5));
+    let mut fetcher = ollama_fetcher(Ok(show_body()));
+    fetcher.post_hang = true;
+    let request = ollama_request().with_timeout(Duration::from_millis(50));
+    let cache = cache();
+    let limits = discover_model_limits_with(&fetcher, &cache, &request).await;
     assert!(limits.and_then(|l| l.context_window).is_none());
     // The timeout is remembered: no second hit.
-    discover_model_limits_with(&ReqwestListingFetcher::default(), &cache, &request).await;
-    assert_eq!(
-        server.show_hits.load(std::sync::atomic::Ordering::SeqCst),
-        1
-    );
+    discover_model_limits_with(&fetcher, &cache, &request).await;
+    assert_eq!(fetcher.post_hits(), 1);
 }
 
 #[test]
