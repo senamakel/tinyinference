@@ -112,7 +112,7 @@ impl Budget {
             .unwrap_or_else(std::sync::PoisonError::into_inner)[self.id]
             .snapshot
     }
-    /// Most recent admission refusal on this ledger, including a child call.
+    /// Most recent admission refusal made directly through this ledger.
     pub fn refusal(&self) -> Option<BudgetExceeded> {
         let ledger = self
             .ledger
@@ -337,7 +337,7 @@ impl<State: Send + Sync> BudgetedModel<State> {
                     .usage
                     .and_then(|usage| usage.charged_amount)
                     .and_then(|amount| u64::try_from(amount.micros).ok())
-                    .map_or(reserved.cost_micros, |amount| amount),
+                    .unwrap_or(reserved.cost_micros),
             }
         };
         reservation.settle(spent);
