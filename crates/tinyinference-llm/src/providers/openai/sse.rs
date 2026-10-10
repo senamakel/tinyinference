@@ -146,7 +146,25 @@ pub(super) struct OpenAiStreamAcc {
     /// conceptual channel opens a fresh block instead, matching how densely
     /// each block gets its own [`ModelStreamItem::BlockStart`]).
     current_block: Option<(usize, OpenKind)>,
+    /// Top-level fields of streamed payloads outside the OpenAI chunk schema
+    /// (a gateway's billing envelope, say), last value per key. They become
+    /// the terminal response's `raw`, the same place the non-streaming path
+    /// keeps the full wire body, so a caller reads them identically on both.
+    extensions: serde_json::Map<String, Value>,
 }
+
+/// Top-level keys of the OpenAI chat-completion chunk schema. Anything else on
+/// a streamed payload is a vendor extension and is kept for `raw`.
+const CHUNK_KEYS: &[&str] = &[
+    "id",
+    "object",
+    "created",
+    "model",
+    "choices",
+    "usage",
+    "system_fingerprint",
+    "service_tier",
+];
 
 impl OpenAiStreamAcc {
     /// Builds an accumulator with the given inline reasoning-tag extraction
