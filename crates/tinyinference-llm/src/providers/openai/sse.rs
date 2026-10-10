@@ -146,7 +146,25 @@ pub(super) struct OpenAiStreamAcc {
     /// conceptual channel opens a fresh block instead, matching how densely
     /// each block gets its own [`ModelStreamItem::BlockStart`]).
     current_block: Option<(usize, OpenKind)>,
+    /// Top-level fields of streamed payloads outside the OpenAI chunk schema
+    /// (a gateway's billing envelope, say), last value per key. They become
+    /// the terminal response's `raw`, the same place the non-streaming path
+    /// keeps the full wire body, so a caller reads them identically on both.
+    extensions: serde_json::Map<String, Value>,
 }
+
+/// Top-level keys of the OpenAI chat-completion chunk schema. Anything else on
+/// a streamed payload is a vendor extension and is kept for `raw`.
+const CHUNK_KEYS: &[&str] = &[
+    "id",
+    "object",
+    "created",
+    "model",
+    "choices",
+    "usage",
+    "system_fingerprint",
+    "service_tier",
+];
 
 impl OpenAiStreamAcc {
     /// Builds an accumulator with the given inline reasoning-tag extraction
@@ -505,7 +523,7 @@ impl OpenAiStreamAcc {
             message,
             usage: self.usage,
             finish_reason: self.finish_reason,
-            raw: None,
+            raw: (!self.extensions.is_empty()).then_some(Value::Object(self.extensions)),
             resolved_model: None,
             continue_turn: None,
             served_from_cache: false,
@@ -636,6 +654,17 @@ impl SseState {
             self.pending.push_back(item);
             return;
         }
+        // A gateway may send its own frame (`event: openhuman-metadata` with
+        // `data: {"openhuman": {...}}`) or extra fields on a chunk. The `event:`
+        // name is not needed: the extension keys are kept whichever frame
+        // carried them, and the chunk fields are ingested as usual.
+        if let Value::Object(fields) = &value {
+            for (key, field) in fields {
+                if !CHUNK_KEYS.contains(&key.as_str()) {
+                    self.acc.extensions.insert(key.clone(), field.clone());
+                }
+            }
+        }
         if let Ok(chunk) = serde_json::from_value::<ChatCompletionChunk>(value) {
             let mut pending = std::mem::take(&mut self.pending);
             self.acc.ingest(chunk, &mut pending);
@@ -764,3 +793,7 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sse_tests.rs"]
+mod tests;
