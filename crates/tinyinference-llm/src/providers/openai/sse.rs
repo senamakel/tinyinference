@@ -654,6 +654,17 @@ impl SseState {
             self.pending.push_back(item);
             return;
         }
+        // A gateway may send its own frame (`event: openhuman-metadata` with
+        // `data: {"openhuman": {...}}`) or extra fields on a chunk. The `event:`
+        // name is not needed: the extension keys are kept whichever frame
+        // carried them, and the chunk fields are ingested as usual.
+        if let Value::Object(fields) = &value {
+            for (key, field) in fields {
+                if !CHUNK_KEYS.contains(&key.as_str()) {
+                    self.acc.extensions.insert(key.clone(), field.clone());
+                }
+            }
+        }
         if let Ok(chunk) = serde_json::from_value::<ChatCompletionChunk>(value) {
             let mut pending = std::mem::take(&mut self.pending);
             self.acc.ingest(chunk, &mut pending);
