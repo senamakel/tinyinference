@@ -384,3 +384,35 @@ async fn multimodal_inputs_are_refused_without_guessing_their_token_cost() {
         super::super::InputSource::Url
     ));
 }
+
+#[tokio::test]
+async fn oversized_schema_and_provider_prompt_are_refused_before_http() {
+    for schema in [true, false] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let provider = crate::providers::openai::OpenAiModel::new("fixture")
+            .with_base_url(format!("http://{}/v1", listener.local_addr().unwrap()));
+        let budget = Budget::new(SpendLimits::default());
+        let model = BudgetedModel::new(Arc::new(provider), budget.clone(), call_policy());
+        let mut request = request();
+        if schema {
+            request.response_format = Some(crate::model::ResponseFormat::JsonSchema {
+                name: "answer".into(),
+                schema: serde_json::json!({"type":"object", "description":"x".repeat(2_000)}),
+            });
+        } else {
+            request.provider_options = serde_json::json!({"instructions":"x".repeat(2_000)});
+        }
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            model.invoke(&(), request),
+        )
+        .await;
+        assert!(matches!(outcome, Ok(Err(crate::Error::Validation(_)))));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert_eq!(budget.snapshot(), BudgetSnapshot::default());
+    }
+}

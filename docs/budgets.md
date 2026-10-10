@@ -12,8 +12,8 @@ cannot each reserve the same capacity. `Error::BudgetExceeded` carries the
 refusing limits, requested amount, completed spend and reservations.
 
 The wrapper caps output tokens and refuses pass-through output cap overrides.
-It currently admits text requests only, using serialized message and schema
-bytes as a conservative input bound; leave room for provider framing. An
+It currently admits text requests only, using complete serialized request
+bytes, including response schemas and provider prompt options as a conservative input bound; leave room for provider framing. An
 incorrect price or token bound is not a provider-enforced billing cap. Actual
 usage exceeding it is retained and stops further calls.
 
@@ -33,5 +33,6 @@ harness retries enter the wrapper once per attempt.
 
 Tests in `model/budget_tests.rs` cover concurrent admission, ancestor ceilings,
 reconciliation, cancellation, streaming completion/drop, cache replay, unknown
-charges, overflow, output cap overrides and provider-internal retries. The
+charges, overflow, output cap overrides, oversized schemas/provider prompts
+and provider-internal retries. The
 OpenHuman facade additionally verifies the HTTP boundary with wiremock.

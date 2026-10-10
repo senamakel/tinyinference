@@ -208,7 +208,7 @@ impl Drop for Reservation {
 #[derive(Debug, Clone, Copy)]
 pub struct CallBudget {
     /// Conservative maximum input token count. Text requests exceeding this
-    /// in serialized bytes are refused; non-text modalities are refused.
+    /// in serialized request bytes are refused; non-text modalities are refused.
     pub input_tokens: u64,
     /// Output cap imposed on every physical provider request.
     pub output_tokens: u32,
@@ -280,8 +280,9 @@ impl<State: Send + Sync> BudgetedModel<State> {
                 "budgeted model output caps must use typed max_tokens".into(),
             ));
         }
-        let bytes = (serde_json::to_vec(&request.messages)?.len() as u64)
-            .saturating_add(serde_json::to_vec(&request.tools)?.len() as u64);
+        // Count the complete typed request: response schemas and provider
+        // instructions also become model input. Framing remains host-bounded.
+        let bytes = serde_json::to_vec(&request)?.len() as u64;
         let text_only = request.messages.iter().all(|message| {
             use crate::message::{ContentBlock, Message};
             let blocks = match message {
