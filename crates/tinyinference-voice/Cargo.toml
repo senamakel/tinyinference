@@ -19,8 +19,8 @@ reqwest = { workspace = true, features = ["multipart"] }
 schemars = { version = "1", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tinyinference-core = { version = "0.3.0", path = "../tinyinference-core" }
-tinyinference-local = { version = "0.3.0", path = "../tinyinference-local" }
+tinyinference-core = { version = "0.4.0", path = "../tinyinference-core" }
+tinyinference-local = { version = "0.4.0", path = "../tinyinference-local" }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 uuid = { workspace = true }
 

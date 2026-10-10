@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0
+
 ### Breaking changes
 
 - Removed the stale copy of the harness response cache from
@@ -14,6 +16,14 @@
 
 ### Added
 
+- OpenAI-compatible provider: `OpenAiConfig` accepts a host-configured
+  `reqwest::Client`, used for every transport path, so a custom provider can
+  trust private CA certificates (openhuman#6905).
+- Model discovery reads an Ollama server's context window from the native
+  `POST /api/show` when its `/v1/models` listing carries none
+  (`LimitSource::NativeApi`, `DiscoveryRequest::with_ollama_native`,
+  `ModelListingFetcher::post_json`). The smaller of `num_ctx` and the
+  architecture `context_length` is used (openhuman#7099).
 - `tinyinference-image`: the `ImageGenerator` trait, `OpenRouterImageGenerator`
   (`POST /images`), `MockImageGenerator`, media-reference standards
   (URL, `data:` URL, bytes, local path → OpenRouter content parts), aspect-ratio,
