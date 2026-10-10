@@ -20,7 +20,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tinyinference-core = { version = "0.3.0", path = "../tinyinference-core" }
+tinyinference-core = { version = "0.4.0", path = "../tinyinference-core" }
 # The model-facing tool protocol: prompt-guided rendering, text-mode parsing,
 # argument repair, and streaming scrub. Owned once, in TinyTools, so this
 # adapter and every host share one grammar table.
