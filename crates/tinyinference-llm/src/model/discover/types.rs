@@ -19,6 +19,9 @@ pub enum LimitSource {
     },
     /// The limit the provider stated in a context-overflow error.
     LearnedFromOverflow,
+    /// The server's native API (Ollama `POST /api/show`), used when its
+    /// OpenAI-compatible listing carries no window.
+    NativeApi,
 }
 
 impl LimitSource {
@@ -29,6 +32,7 @@ impl LimitSource {
             Self::ProviderListing => "provider_listing",
             Self::ProviderEndpoint { .. } => "provider_endpoint",
             Self::LearnedFromOverflow => "learned_from_overflow",
+            Self::NativeApi => "native_api",
         }
     }
 }
@@ -82,8 +86,35 @@ pub struct DiscoveryRequest {
     /// the smallest of those endpoints' own limits
     /// (`/models/{id}/endpoints`), not the model-level maximum.
     pub pinned_providers: Vec<String>,
+    /// Whether to ask Ollama's native `POST {root}/api/show` when the listing
+    /// carries no context window. `None` auto-detects from the endpoint
+    /// ([`looks_like_ollama`]); `Some(_)` forces it on or off.
+    pub ollama_native: Option<bool>,
     /// Upper bound on the whole discovery (all requests together).
     pub timeout: Duration,
+}
+
+/// Whether `endpoint` is plausibly an Ollama server: the default port
+/// (11434) or an `ollama` host name. Ollama's OpenAI-compatible `/v1/models`
+/// never states a window, so those endpoints get the native probe.
+#[must_use]
+pub fn looks_like_ollama(endpoint: &str) -> bool {
+    let rest = endpoint
+        .split_once("://")
+        .map_or(endpoint, |(_, rest)| rest);
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let authority = authority.to_ascii_lowercase();
+    authority.ends_with(":11434") || authority.contains("ollama")
+}
+
+/// The server root (`http://host:11434`) an OpenAI-compatible base hangs off.
+fn native_root(endpoint: &str) -> String {
+    endpoint
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 impl DiscoveryRequest {
@@ -101,6 +132,7 @@ impl DiscoveryRequest {
             probe_single_model: true,
             headers: Vec::new(),
             pinned_providers: Vec::new(),
+            ollama_native: None,
             timeout: Self::DEFAULT_TIMEOUT,
         }
     }
@@ -133,6 +165,26 @@ impl DiscoveryRequest {
         self
     }
 
+    /// Forces the Ollama native probe on or off (default: auto-detect).
+    #[must_use]
+    pub fn with_ollama_native(mut self, enabled: bool) -> Self {
+        self.ollama_native = Some(enabled);
+        self
+    }
+
+    /// Whether the Ollama native probe applies to this request.
+    #[must_use]
+    pub fn ollama_native_enabled(&self) -> bool {
+        self.ollama_native
+            .unwrap_or_else(|| looks_like_ollama(&self.endpoint))
+    }
+
+    /// `POST` URL of Ollama's `/api/show` for this endpoint.
+    #[must_use]
+    pub fn ollama_show_url(&self) -> String {
+        format!("{}/api/show", native_root(&self.endpoint))
+    }
+
     /// Sets the bound on the whole discovery.
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -156,9 +208,10 @@ impl DiscoveryRequest {
         providers.sort();
         providers.dedup();
         format!(
-            "{}|{}|{}|{:016x}",
+            "{}|{}|{}|{}|{:016x}",
             self.effective_listing_url(),
             self.probe_single_model,
+            self.ollama_native_enabled(),
             providers.join(","),
             self.credential_scope()
         )
@@ -201,6 +254,7 @@ impl std::fmt::Debug for DiscoveryRequest {
             .field("probe_single_model", &self.probe_single_model)
             .field("headers", &header_names)
             .field("pinned_providers", &self.pinned_providers)
+            .field("ollama_native", &self.ollama_native)
             .field("timeout", &self.timeout)
             .finish()
     }
