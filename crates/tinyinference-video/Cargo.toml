@@ -16,7 +16,7 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tinyinference-image = { version = "0.4.0", path = "../tinyinference-image" }
+tinyinference-image = { version = "0.3.0", path = "../tinyinference-image" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
