@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Removed the stale copy of the harness response cache from
+  `tinyinference_llm::cache`: `cache_key`, the `ResponseCache` trait,
+  `InMemoryResponseCache`, `PromptCacheLayout` and `CacheLayoutEvent`. Nothing
+  used them; the maintained versions (scoped keys, SQLite store, singleflight,
+  prompt-layout guard) live in `tinyagents-harness`'s `cache` module.
+  `CachePolicy` stays at `tinyinference_llm::cache::CachePolicy`, unchanged.
+  `canonical_value` is now public there. The crate no longer depends on `sha2`.
+
 ### Added
 
 - `tinyinference-image`: the `ImageGenerator` trait, `OpenRouterImageGenerator`

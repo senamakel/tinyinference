@@ -25,6 +25,78 @@ fn request(model: &str, temperature: f64) -> ModelRequest {
         .with_temperature(temperature)
 }
 
+#[tokio::test]
+async fn configured_http_client_is_used_by_built_model() {
+    for responses_api_primary in [false, true] {
+        let response = if responses_api_primary {
+            r#"{"output":[]}"#.to_string()
+        } else {
+            completion_body()
+        };
+        let (base, server) = serve_sequence(vec![(200, response)]);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-host-client", "configured".parse().unwrap());
+        let http = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .unwrap();
+        let model = super::build_openai_model_with_http(
+            super::OpenAiConfig {
+                provider_name: "custom",
+                endpoint: &base,
+                api_key: "key",
+                auth_style: super::AuthStyle::Bearer,
+                model: "fixture",
+                temperature_unsupported_models: &[],
+                temperature_override: None,
+                merge_system_into_user: false,
+                extra_headers: &[],
+                native_tool_calling: None,
+                vision: None,
+                default_provider_options: None,
+                responses_api_primary,
+                responses_omit_max_output_tokens: false,
+                extra_query_params: &[],
+                user_agent: None,
+                explicit_cache_control: false,
+            },
+            http,
+        );
+        model.invoke(&(), request("fixture", 0.7)).await.unwrap();
+        let requests = server.join().unwrap();
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("x-host-client: configured"),
+            "responses_api_primary={responses_api_primary}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn configured_http_client_is_used_for_model_listing() {
+    let (base, server) = serve_sequence(vec![(200, r#"{"data":[]}"#.into())]);
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("x-host-client", "configured".parse().unwrap());
+    let http = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap();
+    let model = OpenAiModel::new("key")
+        .with_base_url(&base)
+        .with_request_options(crate::providers::ProviderRequestOptions {
+            http: Some(http),
+            ..Default::default()
+        });
+    model.list_models().await.unwrap();
+    let requests = server.join().unwrap();
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("x-host-client: configured")
+    );
+}
+
 fn unsupported_patterns() -> Vec<String> {
     ["o1*", "o3*", "o4*", "gpt-5*"]
         .into_iter()
