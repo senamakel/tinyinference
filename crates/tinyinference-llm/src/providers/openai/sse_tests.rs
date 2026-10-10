@@ -3,12 +3,12 @@ use serde_json::json;
 
 /// Runs a synthetic SSE byte stream through the parser and returns its
 /// terminal [`ModelStreamItem::Completed`] response.
-async fn completed(raw: Vec<&[u8]>) -> ModelResponse {
+async fn completed(raw: Vec<&'static [u8]>) -> ModelResponse {
     use futures::StreamExt;
 
     let bytes = futures::stream::iter(
         raw.into_iter()
-            .map(|v| Ok::<bytes::Bytes, crate::Error>(bytes::Bytes::copy_from_slice(v))),
+            .map(|v| Ok::<bytes::Bytes, crate::Error>(bytes::Bytes::from_static(v))),
     );
     let state = SseState {
         bytes: Box::pin(bytes),
