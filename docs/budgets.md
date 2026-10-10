@@ -22,7 +22,9 @@ reserved cost. Missing token usage retains the token reservation. Provider
 errors, dropped streams and cancelled calls retain the complete reservation
 because a lost response may have been billed. Cache replays charge nothing.
 Streaming items and transport metadata pass through unchanged; a completed
-stream reconciles exactly once.
+stream reconciles exactly once. Terminal failures charge their reservation
+when observed, even if the consumer retains the stream. The physical-attempt
+scope remains active while lazy streams are polled.
 
 OpenAI's shared transport tail admits internal request-shape retry attempts
 under the invocation's physical-call scope. The initial attempt owns the outer

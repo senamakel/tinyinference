@@ -388,8 +388,7 @@ async fn multimodal_inputs_are_refused_without_guessing_their_token_cost() {
 #[tokio::test]
 async fn oversized_schema_and_provider_prompt_are_refused_before_http() {
     for schema in [true, false] {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let provider = crate::providers::openai::OpenAiModel::new("fixture")
             .with_base_url(format!("http://{}/v1", listener.local_addr().unwrap()));
         let budget = Budget::new(SpendLimits::default());
@@ -403,16 +402,93 @@ async fn oversized_schema_and_provider_prompt_are_refused_before_http() {
         } else {
             request.provider_options = serde_json::json!({"instructions":"x".repeat(2_000)});
         }
-        let outcome = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            model.invoke(&(), request),
-        )
-        .await;
-        assert!(matches!(outcome, Ok(Err(crate::Error::Validation(_)))));
-        assert_eq!(
-            listener.accept().unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock
-        );
+        tokio::select! {
+            outcome = model.invoke(&(), request) => assert!(matches!(outcome, Err(crate::Error::Validation(_)))),
+            connection = listener.accept() => panic!("validation opened an HTTP connection: {connection:?}"),
+        }
         assert_eq!(budget.snapshot(), BudgetSnapshot::default());
     }
+}
+
+#[derive(Debug)]
+struct LazyRetryStreamModel(Arc<std::sync::atomic::AtomicUsize>);
+#[async_trait]
+impl ChatModel<()> for LazyRetryStreamModel {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> crate::Result<ModelResponse> {
+        unreachable!()
+    }
+    async fn stream(&self, _: &(), _: ModelRequest) -> crate::Result<ModelStream> {
+        let calls = Arc::clone(&self.0);
+        let mut completed = false;
+        Ok(ModelStream::new(Box::pin(futures::stream::poll_fn(
+            move |_| {
+                if completed {
+                    return std::task::Poll::Ready(None);
+                }
+                completed = true;
+                for _ in 0..2 {
+                    if let Err(error) = before_physical_attempt() {
+                        return std::task::Poll::Ready(Some(ModelStreamItem::Failed(
+                            error.to_string(),
+                        )));
+                    }
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                std::task::Poll::Ready(Some(ModelStreamItem::Completed(ModelResponse::assistant(
+                    "unsafe",
+                ))))
+            },
+        ))))
+    }
+}
+#[tokio::test]
+async fn lazy_stream_physical_retry_reserves_before_dispatch_and_charges_terminal_failure() {
+    use futures::StreamExt;
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ledger = Budget::new(SpendLimits {
+        tokens: None,
+        cost_micros: Some(100),
+    });
+    let model = BudgetedModel::new(
+        Arc::new(LazyRetryStreamModel(Arc::clone(&calls))),
+        ledger.clone(),
+        call_policy(),
+    );
+    let mut stream = model.stream(&(), request()).await.unwrap();
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Failed(_))
+    ));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(ledger.snapshot().reserved.cost_micros, 0);
+    assert_eq!(ledger.snapshot().spent.cost_micros, 100);
+    assert!(ledger.refusal().is_some());
+}
+#[derive(Debug)]
+struct FailedStreamModel;
+#[async_trait]
+impl ChatModel<()> for FailedStreamModel {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> crate::Result<ModelResponse> {
+        unreachable!()
+    }
+    async fn stream(&self, _: &(), _: ModelRequest) -> crate::Result<ModelStream> {
+        Ok(ModelStream::new(Box::pin(futures::stream::iter(vec![
+            ModelStreamItem::ProviderFailed(crate::model::ProviderError::default()),
+        ]))))
+    }
+}
+#[tokio::test]
+async fn terminal_stream_failure_is_charged_while_the_consumer_retains_the_stream() {
+    use futures::StreamExt;
+    let ledger = Budget::new(SpendLimits::default());
+    let model = BudgetedModel::new(Arc::new(FailedStreamModel), ledger.clone(), call_policy());
+    let mut stream = model.stream(&(), request()).await.unwrap();
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::ProviderFailed(_))
+    ));
+    assert_eq!(ledger.snapshot().reserved.cost_micros, 0);
+    assert_eq!(ledger.snapshot().spent.cost_micros, 100);
+    drop(stream);
+    assert_eq!(ledger.snapshot().spent.cost_micros, 100);
 }

@@ -223,7 +223,7 @@ struct AttemptScope {
     requested: Spend,
     attempts: std::sync::atomic::AtomicUsize,
 }
-tokio::task_local! { static PHYSICAL_CALL: AttemptScope; }
+tokio::task_local! { static PHYSICAL_CALL: Arc<AttemptScope>; }
 /// Admit an extra physical attempt made internally by a concrete provider.
 ///
 /// Outside a budgeted invocation this is a no-op. The first attempt uses the
@@ -365,11 +365,11 @@ impl<State: Send + Sync> ChatModel<State> for BudgetedModel<State> {
         mut request: ModelRequest,
     ) -> crate::Result<ModelResponse> {
         let reservation = self.admit(&mut request)?;
-        let scope = AttemptScope {
+        let scope = Arc::new(AttemptScope {
             budget: self.budget.clone(),
             requested: reservation.requested,
             attempts: std::sync::atomic::AtomicUsize::new(0),
-        };
+        });
         let response = PHYSICAL_CALL
             .scope(scope, self.inner.invoke(state, request))
             .await?;
@@ -378,23 +378,40 @@ impl<State: Send + Sync> ChatModel<State> for BudgetedModel<State> {
     }
     async fn stream(&self, state: &State, mut request: ModelRequest) -> crate::Result<ModelStream> {
         let reservation = self.admit(&mut request)?;
-        let scope = AttemptScope {
+        let scope = Arc::new(AttemptScope {
             budget: self.budget.clone(),
             requested: reservation.requested,
             attempts: std::sync::atomic::AtomicUsize::new(0),
-        };
+        });
         let stream = PHYSICAL_CALL
-            .scope(scope, self.inner.stream(state, request))
+            .scope(Arc::clone(&scope), self.inner.stream(state, request))
             .await?;
+        let metadata = stream.metadata().clone();
+        let mut stream = Box::pin(stream);
         let mut reservation = Some(reservation);
-        Ok(stream.map_items(move |item| {
-            if let ModelStreamItem::Completed(response) = &item
-                && let Some(permit) = reservation.take()
-            {
-                Self::settle(permit, response);
-            }
-            item
-        }))
+        // Lazy providers can send/retry while polled; retain the same attempt
+        // counter and admission scope over both construction and consumption.
+        let stream = futures::stream::poll_fn(move |cx| {
+            PHYSICAL_CALL.sync_scope(Arc::clone(&scope), || {
+                let item = futures::Stream::poll_next(stream.as_mut(), cx);
+                match &item {
+                    std::task::Poll::Ready(Some(ModelStreamItem::Completed(response))) => {
+                        if let Some(permit) = reservation.take() {
+                            Self::settle(permit, response);
+                        }
+                    }
+                    std::task::Poll::Ready(Some(
+                        ModelStreamItem::Failed(_)
+                        | ModelStreamItem::ProviderFailed(_)
+                        | ModelStreamItem::Deferred(_),
+                    ))
+                    | std::task::Poll::Ready(None) => drop(reservation.take()),
+                    _ => (),
+                }
+                item
+            })
+        });
+        Ok(ModelStream::new(Box::pin(stream)).with_metadata(metadata))
     }
 }
 #[cfg(test)]
