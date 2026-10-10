@@ -104,11 +104,12 @@ pub fn limits_from_entry(item: &Value) -> Option<ModelLimits> {
 
 /// The window an Ollama `POST /api/show` body reports.
 ///
-/// A `num_ctx` in the model's `parameters` text (the Modelfile setting the
-/// server loads it with) is the real ceiling for a request, so it wins; else
-/// the architecture's `*.context_length` from `model_info`. Overstating the
-/// window would stop compaction from firing, so with several candidates the
-/// smallest is used.
+/// Candidates are the `num_ctx` in the model's `parameters` text (the Modelfile
+/// setting the server loads it with) and the architecture's `*.context_length`
+/// from `model_info`. Overstating the window would stop compaction from firing,
+/// so the smallest candidate is used; a lone architecture maximum is reported
+/// as is (it is the best figure `/api/show` offers, and a server-side default
+/// allocation is not visible here).
 #[must_use]
 pub fn parse_ollama_show(body: &Value) -> Option<ModelLimits> {
     let num_ctx = body
@@ -134,7 +135,7 @@ pub fn parse_ollama_show(body: &Value) -> Option<ModelLimits> {
                 .filter_map(|(_, value)| positive_u64(value))
                 .min()
         });
-    let context_window = num_ctx.or(architecture)?;
+    let context_window = num_ctx.into_iter().chain(architecture).min()?;
     Some(ModelLimits {
         context_window: Some(context_window),
         max_output_tokens: None,

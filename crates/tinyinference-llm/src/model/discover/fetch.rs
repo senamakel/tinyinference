@@ -8,7 +8,7 @@ use super::parse::{
     model_ids_match, parse_listing_limits, parse_model_limits, parse_ollama_show,
     parse_openrouter_endpoint_limits,
 };
-use super::types::{DiscoveryRequest, ModelLimits};
+use super::types::{DiscoveryRequest, LimitSource, ModelLimits};
 
 /// Fetches a JSON document for discovery. Injectable so hosts can reuse their
 /// own HTTP client (proxies, TLS policy) and tests never touch the network.
@@ -233,6 +233,12 @@ async fn fetch_limits(
             if request.pinned_providers.is_empty() {
                 let variant = request.cache_variant();
                 for (id, limits) in listed {
+                    // A partial entry (no window) must not become a finished
+                    // discovery for its model when the native probe could still
+                    // supply the window on that model's own request.
+                    if request.ollama_native_enabled() && limits.context_window.is_none() {
+                        continue;
+                    }
                     if !model_ids_match(&id, &request.model) {
                         cache.insert_discovered_variant(
                             &request.endpoint,
@@ -303,7 +309,10 @@ async fn fetch_limits(
                     );
                     found = Some(match found {
                         Some(mut listed) => {
+                            // The window now comes from the native API; label it
+                            // so, keeping the listing's other fields.
                             listed.context_window = native.context_window;
+                            listed.source = LimitSource::NativeApi;
                             listed
                         }
                         None => native,
