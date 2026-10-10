@@ -523,7 +523,7 @@ impl OpenAiStreamAcc {
             message,
             usage: self.usage,
             finish_reason: self.finish_reason,
-            raw: None,
+            raw: (!self.extensions.is_empty()).then(|| Value::Object(self.extensions)),
             resolved_model: None,
             continue_turn: None,
             served_from_cache: false,
