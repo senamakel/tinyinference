@@ -302,7 +302,7 @@ async fn fetch_limits(
             Ok(reply) => {
                 if let Some(native) = parse_ollama_show(&reply) {
                     tracing::debug!(
-                        endpoint = %request.endpoint,
+                        endpoint = %redact_url(&request.endpoint),
                         model = %request.model,
                         context_window = ?native.context_window,
                         "[model_limits] context window from Ollama /api/show"
@@ -320,7 +320,7 @@ async fn fetch_limits(
                 }
             }
             Err(error) => tracing::debug!(
-                endpoint = %request.endpoint,
+                endpoint = %redact_url(&request.endpoint),
                 model = %request.model,
                 error = %error,
                 "[model_limits] Ollama /api/show unavailable"

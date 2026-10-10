@@ -590,7 +590,9 @@ async fn failed_ollama_probe_is_cached_and_not_retried() {
     assert_eq!(fetcher.post_hits(), 1);
 }
 
-#[tokio::test]
+// Paused time: the runtime advances its clock itself once everything is idle,
+// so the timeout fires deterministically without sleeping.
+#[tokio::test(start_paused = true)]
 async fn hanging_ollama_probe_is_bounded_by_the_timeout() {
     let mut fetcher = ollama_fetcher(Ok(show_body()));
     fetcher.post_hang = true;
