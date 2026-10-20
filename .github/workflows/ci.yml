@@ -30,7 +30,9 @@ jobs:
         run: cargo +stable fmt --all -- --check
 
       - name: Keep storage engines out of normal dependencies
-        run: bash .github/scripts/check-storage-engines.sh
+        run: |
+          bash .github/scripts/check-storage-engines.sh --self-test
+          bash .github/scripts/check-storage-engines.sh
 
       - name: Clippy
         run: cargo +stable clippy --all-targets --all-features -- -D warnings
