@@ -56,4 +56,5 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/tinyhumansai/tinytools",
     "https://github.com/tinyhumansai/tinystoragedrivers",
+    "https://github.com/senamakel/tinystoragedrivers",
 ]
