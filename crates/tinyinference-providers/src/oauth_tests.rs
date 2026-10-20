@@ -72,8 +72,11 @@ fn flow_config(token_url: &str) -> OAuthConfig {
     }
 }
 
-fn memory_flow(token_url: &str) -> (OAuthFlow, Arc<tinystoragedrivers_secrets::MemorySecrets>) {
-    let secrets = Arc::new(tinystoragedrivers_secrets::MemorySecrets::new());
+fn memory_flow(token_url: &str) -> (OAuthFlow, Arc<dyn tinystoragedrivers_api::SecretStore>) {
+    let scope = tinystoragedrivers_types::Scope::new("oauth-test").unwrap();
+    let secrets = tinystoragedrivers_testkit::memory_storage(&scope)
+        .secrets()
+        .clone();
     (
         OAuthFlow::new(flow_config(token_url), secrets.clone()),
         secrets,
@@ -113,7 +116,10 @@ async fn start_keeps_pending_state_in_the_secret_store_not_on_disk() {
 
 #[tokio::test]
 async fn state_equals_verifier_uses_the_stored_verifier_as_state() {
-    let secrets = Arc::new(tinystoragedrivers_secrets::MemorySecrets::new());
+    let scope = tinystoragedrivers_types::Scope::new("oauth-state-test").unwrap();
+    let secrets = tinystoragedrivers_testkit::memory_storage(&scope)
+        .secrets()
+        .clone();
     let mut config = flow_config("http://127.0.0.1:9/token");
     config.state_equals_verifier = true;
     let flow = OAuthFlow::new(config, secrets.clone());
@@ -121,6 +127,25 @@ async fn state_equals_verifier_uses_the_stored_verifier_as_state() {
     let stored = secrets.get("test-oauth-pending").await.unwrap().unwrap();
     let pending: PendingOAuth = serde_json::from_slice(&stored).unwrap();
     assert_eq!(pending.verifier, start.state);
+}
+
+#[tokio::test]
+async fn reads_pending_secret_bytes_written_by_v041() {
+    // v0.4.1 serialized PendingOAuth as these four JSON fields in this order;
+    // keep this byte fixture compatible with that released SecretStore format.
+    let (flow, secrets) = memory_flow("http://127.0.0.1:9/token");
+    let released_v041_bytes = format!(
+        r#"{{"state":"expected","verifier":"released-verifier","redirect_uri":"http://127.0.0.1:1455/cb","created_at":{}}}"#,
+        unix_now_secs()
+    );
+    secrets
+        .set("test-oauth-pending", released_v041_bytes.as_bytes())
+        .await
+        .unwrap();
+
+    let error = flow.complete("code=abc&state=other").await.unwrap_err();
+    assert!(error.contains("state mismatch"));
+    assert!(secrets.get("test-oauth-pending").await.unwrap().is_none());
 }
 
 #[tokio::test]
