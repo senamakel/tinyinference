@@ -131,13 +131,30 @@ async fn state_equals_verifier_uses_the_stored_verifier_as_state() {
 
 #[tokio::test]
 async fn reads_pending_secret_bytes_written_by_v041() {
-    // v0.4.1 serialized this SecretStore record as these fields in this exact
-    // order (see the released tag's PendingOAuth declaration). The timestamp
-    // stays live so the flow exercises the same callback read path.
+    // This byte fixture was emitted by the v0.4.1 PendingOAuth serializer; its
+    // provenance and regeneration command live beside the fixture.
     let (flow, secrets) = memory_flow("http://127.0.0.1:9/token");
-    let mut released_v041_bytes = br#"{"state":"expected","verifier":"released-verifier","redirect_uri":"http://127.0.0.1:1455/cb","created_at":"#.to_vec();
-    released_v041_bytes.extend_from_slice(unix_now_secs().to_string().as_bytes());
-    released_v041_bytes.push(b'}');
+    let mut released_v041_bytes =
+        include_bytes!("../tests/fixtures/oauth-pending-v041.json").to_vec();
+    let marker = b"\"created_at\":";
+    let timestamp_start = released_v041_bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("released fixture has the created_at field")
+        + marker.len();
+    let timestamp_end = timestamp_start
+        + released_v041_bytes[timestamp_start..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+    released_v041_bytes.splice(
+        timestamp_start..timestamp_end,
+        unix_now_secs().to_string().bytes(),
+    );
+    let released_pending: PendingOAuth = serde_json::from_slice(&released_v041_bytes).unwrap();
+    assert_eq!(released_pending.state, "expected");
+    assert_eq!(released_pending.verifier, "released-verifier");
+    assert_eq!(released_pending.redirect_uri, "http://127.0.0.1:1455/cb");
     secrets
         .set("test-oauth-pending", &released_v041_bytes)
         .await
