@@ -6,7 +6,8 @@ use bytes::Bytes;
 use std::sync::Arc;
 
 use tinystoragedrivers_api::BlobStore;
-use tinystoragedrivers_types::Scope;
+use tinystoragedrivers_testkit::{Failing, FaultPlan};
+use tinystoragedrivers_types::{ErrorKind, Scope};
 
 use crate::media::GeneratedMedia;
 use crate::mock::TINY_PNG;
@@ -209,15 +210,17 @@ async fn persist_without_prefix_uses_fallback_extension_and_default_stem() {
 
 #[tokio::test]
 async fn persist_surfaces_a_store_refusal_as_a_storage_error() {
-    let blobs = memory_blobs();
+    let scope = Scope::new("media-refusal-test").unwrap();
+    let storage = tinystoragedrivers_testkit::memory_storage(&scope);
+    let plan = FaultPlan::new();
+    plan.fail_operation_nth("blobs.put", 1, ErrorKind::Unavailable);
+    let blobs = Failing::with_plan(storage.blobs().clone(), plan);
     let media = GeneratedMedia::new("image/png", TINY_PNG);
     assert!(matches!(
-        media
-            .persist(blobs.as_ref(), "_tsd/sealed", "x", "png")
-            .await,
+        media.persist(&blobs, "media", "x", "png").await,
         Err(Error::Storage(_))
     ));
-    assert!(blobs.list("").await.unwrap().is_empty());
+    assert!(storage.blobs().list("").await.unwrap().is_empty());
 }
 
 #[tokio::test]
