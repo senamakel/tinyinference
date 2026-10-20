@@ -131,15 +131,15 @@ async fn state_equals_verifier_uses_the_stored_verifier_as_state() {
 
 #[tokio::test]
 async fn reads_pending_secret_bytes_written_by_v041() {
-    // v0.4.1 serialized PendingOAuth as these four JSON fields in this order;
-    // keep this byte fixture compatible with that released SecretStore format.
+    // v0.4.1 serialized this SecretStore record as these fields in this exact
+    // order (see the released tag's PendingOAuth declaration). The timestamp
+    // stays live so the flow exercises the same callback read path.
     let (flow, secrets) = memory_flow("http://127.0.0.1:9/token");
-    let released_v041_bytes = format!(
-        r#"{{"state":"expected","verifier":"released-verifier","redirect_uri":"http://127.0.0.1:1455/cb","created_at":{}}}"#,
-        unix_now_secs()
-    );
+    let mut released_v041_bytes = br#"{"state":"expected","verifier":"released-verifier","redirect_uri":"http://127.0.0.1:1455/cb","created_at":"#.to_vec();
+    released_v041_bytes.extend_from_slice(unix_now_secs().to_string().as_bytes());
+    released_v041_bytes.push(b'}');
     secrets
-        .set("test-oauth-pending", released_v041_bytes.as_bytes())
+        .set("test-oauth-pending", &released_v041_bytes)
         .await
         .unwrap();
 
