@@ -212,7 +212,9 @@ async fn persist_surfaces_a_store_refusal_as_a_storage_error() {
     let blobs = memory_blobs();
     let media = GeneratedMedia::new("image/png", TINY_PNG);
     assert!(matches!(
-        media.persist(blobs.as_ref(), "a/../b", "x", "png").await,
+        media
+            .persist(blobs.as_ref(), "_tsd/sealed", "x", "png")
+            .await,
         Err(Error::Storage(_))
     ));
     assert!(blobs.list("").await.unwrap().is_empty());

@@ -22,6 +22,7 @@ thiserror = { workspace = true }
 tinyinference-core = { version = "0.4.0", path = "../tinyinference-core" }
 # Storage ports only: generated media is written through a `BlobStore`.
 tinystoragedrivers-api = { version = "1.0.0", git = "https://github.com/senamakel/tinystoragedrivers", rev = "6d6ec635be0f36339731eed73fac5c89bde36e84" }
+tinystoragedrivers-types = { version = "1.0.0", git = "https://github.com/senamakel/tinystoragedrivers", rev = "6d6ec635be0f36339731eed73fac5c89bde36e84" }
 tokio = { workspace = true, features = ["fs"] }
 tracing = { workspace = true }
 
