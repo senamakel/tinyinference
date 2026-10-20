@@ -263,7 +263,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -936,7 +936,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1170,7 +1170,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1473,7 +1473,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1666,7 +1666,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-api"
 version = "1.0.0"
-source = "git+https://github.com/senamakel/tinystoragedrivers?rev=6d6ec635be0f36339731eed73fac5c89bde36e84#6d6ec635be0f36339731eed73fac5c89bde36e84"
+source = "git+https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0-alpha.1#cd89b83c9da55228980cd195bd06d4a851753d10"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1680,7 +1680,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-blob"
 version = "1.0.0"
-source = "git+https://github.com/senamakel/tinystoragedrivers?rev=6d6ec635be0f36339731eed73fac5c89bde36e84#6d6ec635be0f36339731eed73fac5c89bde36e84"
+source = "git+https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0-alpha.1#cd89b83c9da55228980cd195bd06d4a851753d10"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1694,7 +1694,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-connect"
 version = "1.0.0"
-source = "git+https://github.com/senamakel/tinystoragedrivers?rev=6d6ec635be0f36339731eed73fac5c89bde36e84#6d6ec635be0f36339731eed73fac5c89bde36e84"
+source = "git+https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0-alpha.1#cd89b83c9da55228980cd195bd06d4a851753d10"
 dependencies = [
  "rusqlite",
  "tinystoragedrivers-types",
@@ -1704,7 +1704,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-document"
 version = "1.0.0"
-source = "git+https://github.com/senamakel/tinystoragedrivers?rev=6d6ec635be0f36339731eed73fac5c89bde36e84#6d6ec635be0f36339731eed73fac5c89bde36e84"
+source = "git+https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0-alpha.1#cd89b83c9da55228980cd195bd06d4a851753d10"
 dependencies = [
  "async-trait",
  "data-encoding",
@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-kv"
 version = "1.0.0"
-source = "git+https://github.com/senamakel/tinystoragedrivers?rev=6d6ec635be0f36339731eed73fac5c89bde36e84#6d6ec635be0f36339731eed73fac5c89bde36e84"
+source = "git+https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0-alpha.1#cd89b83c9da55228980cd195bd06d4a851753d10"
 dependencies = [
  "async-trait",
  "serde",
@@ -1734,7 +1734,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-queue"
 version = "1.0.0"
-source = "git+https://github.com/senamakel/tinystoragedrivers?rev=6d6ec635be0f36339731eed73fac5c89bde36e84#6d6ec635be0f36339731eed73fac5c89bde36e84"
+source = "git+https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0-alpha.1#cd89b83c9da55228980cd195bd06d4a851753d10"
 dependencies = [
  "async-trait",
  "data-encoding",
@@ -1750,7 +1750,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-secrets"
 version = "1.0.0"
-source = "git+https://github.com/senamakel/tinystoragedrivers?rev=6d6ec635be0f36339731eed73fac5c89bde36e84#6d6ec635be0f36339731eed73fac5c89bde36e84"
+source = "git+https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0-alpha.1#cd89b83c9da55228980cd195bd06d4a851753d10"
 dependencies = [
  "async-trait",
  "tinystoragedrivers-api",
@@ -1761,7 +1761,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-testkit"
 version = "1.0.0"
-source = "git+https://github.com/senamakel/tinystoragedrivers?rev=6d6ec635be0f36339731eed73fac5c89bde36e84#6d6ec635be0f36339731eed73fac5c89bde36e84"
+source = "git+https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0-alpha.1#cd89b83c9da55228980cd195bd06d4a851753d10"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1782,7 +1782,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-types"
 version = "1.0.0"
-source = "git+https://github.com/senamakel/tinystoragedrivers?rev=6d6ec635be0f36339731eed73fac5c89bde36e84#6d6ec635be0f36339731eed73fac5c89bde36e84"
+source = "git+https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0-alpha.1#cd89b83c9da55228980cd195bd06d4a851753d10"
 dependencies = [
  "serde",
  "serde_json",
