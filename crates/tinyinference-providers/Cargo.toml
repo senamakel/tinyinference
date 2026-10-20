@@ -20,15 +20,15 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 # Storage ports only (the `SecretStore` holding the short-lived PKCE state);
 # the host decides which driver backs them.
-tinystoragedrivers-api = { version = "2.0.0", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.0" }
+tinystoragedrivers-api = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
 tracing = { workspace = true }
 url = { workspace = true }
 zeroize = "1"
 
 [dev-dependencies]
 axum = { workspace = true }
-tinystoragedrivers-testkit = { version = "2.0.0", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.0" }
-tinystoragedrivers-types = { version = "2.0.0", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.0" }
+tinystoragedrivers-testkit = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
+tinystoragedrivers-types = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
 tokio = { workspace = true, features = ["macros", "rt", "net"] }
 
 [lints]
