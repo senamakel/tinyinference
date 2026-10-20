@@ -1,7 +1,8 @@
 //! Generated media artifacts and their persistence through the blob port.
 
 use bytes::Bytes;
-use tinystoragedrivers_core::{BlobMeta, BlobStore};
+use tinystoragedrivers_api::BlobStore;
+use tinystoragedrivers_types::BlobMeta;
 
 use crate::reference::extension_for_media_type;
 use crate::{Error, Result};
