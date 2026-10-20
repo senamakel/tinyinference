@@ -1772,8 +1772,8 @@ dependencies = [
 
 [[package]]
 name = "tinytools"
-version = "0.5.0"
-source = "git+https://github.com/tinyhumansai/tinytools?rev=bd60b9b52f1998b4483b9cf107a72d3338e672f8#bd60b9b52f1998b4483b9cf107a72d3338e672f8"
+version = "0.6.0"
+source = "git+https://github.com/tinyhumansai/tinytools?rev=1ec3468f6602b69b955a0e94105ed63abb5aa98c#1ec3468f6602b69b955a0e94105ed63abb5aa98c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1783,8 +1783,8 @@ dependencies = [
 
 [[package]]
 name = "tinytools-agent"
-version = "0.5.0"
-source = "git+https://github.com/tinyhumansai/tinytools?rev=bd60b9b52f1998b4483b9cf107a72d3338e672f8#bd60b9b52f1998b4483b9cf107a72d3338e672f8"
+version = "0.6.0"
+source = "git+https://github.com/tinyhumansai/tinytools?rev=1ec3468f6602b69b955a0e94105ed63abb5aa98c#1ec3468f6602b69b955a0e94105ed63abb5aa98c"
 dependencies = [
  "regex",
  "serde",
