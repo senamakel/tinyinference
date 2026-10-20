@@ -7,7 +7,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngExt as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_secrets::SecretStore;
+use tinystoragedrivers_api::SecretStore;
 
 const PENDING_TTL_SECS: u64 = 600;
 const HTTP_TIMEOUT_SECS: u64 = 20;

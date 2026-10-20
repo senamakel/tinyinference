@@ -72,8 +72,11 @@ fn flow_config(token_url: &str) -> OAuthConfig {
     }
 }
 
-fn memory_flow(token_url: &str) -> (OAuthFlow, Arc<tinystoragedrivers_secrets::MemorySecrets>) {
-    let secrets = Arc::new(tinystoragedrivers_secrets::MemorySecrets::new());
+fn memory_flow(token_url: &str) -> (OAuthFlow, Arc<dyn tinystoragedrivers_api::SecretStore>) {
+    let scope = tinystoragedrivers_types::Scope::new("oauth-test").unwrap();
+    let secrets = tinystoragedrivers_testkit::memory_storage(&scope)
+        .secrets()
+        .clone();
     (
         OAuthFlow::new(flow_config(token_url), secrets.clone()),
         secrets,
@@ -113,7 +116,10 @@ async fn start_keeps_pending_state_in_the_secret_store_not_on_disk() {
 
 #[tokio::test]
 async fn state_equals_verifier_uses_the_stored_verifier_as_state() {
-    let secrets = Arc::new(tinystoragedrivers_secrets::MemorySecrets::new());
+    let scope = tinystoragedrivers_types::Scope::new("oauth-state-test").unwrap();
+    let secrets = tinystoragedrivers_testkit::memory_storage(&scope)
+        .secrets()
+        .clone();
     let mut config = flow_config("http://127.0.0.1:9/token");
     config.state_equals_verifier = true;
     let flow = OAuthFlow::new(config, secrets.clone());
@@ -121,6 +127,42 @@ async fn state_equals_verifier_uses_the_stored_verifier_as_state() {
     let stored = secrets.get("test-oauth-pending").await.unwrap().unwrap();
     let pending: PendingOAuth = serde_json::from_slice(&stored).unwrap();
     assert_eq!(pending.verifier, start.state);
+}
+
+#[tokio::test]
+async fn reads_pending_secret_bytes_written_by_v041() {
+    // This byte fixture was emitted by the v0.4.1 PendingOAuth serializer; its
+    // provenance and regeneration command live beside the fixture.
+    let (flow, secrets) = memory_flow("http://127.0.0.1:9/token");
+    let mut released_v041_bytes =
+        include_bytes!("../tests/fixtures/oauth-pending-v041.json").to_vec();
+    let marker = b"\"created_at\":";
+    let timestamp_start = released_v041_bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("released fixture has the created_at field")
+        + marker.len();
+    let timestamp_end = timestamp_start
+        + released_v041_bytes[timestamp_start..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+    released_v041_bytes.splice(
+        timestamp_start..timestamp_end,
+        unix_now_secs().to_string().bytes(),
+    );
+    let released_pending: PendingOAuth = serde_json::from_slice(&released_v041_bytes).unwrap();
+    assert_eq!(released_pending.state, "expected");
+    assert_eq!(released_pending.verifier, "released-verifier");
+    assert_eq!(released_pending.redirect_uri, "http://127.0.0.1:1455/cb");
+    secrets
+        .set("test-oauth-pending", &released_v041_bytes)
+        .await
+        .unwrap();
+
+    let error = flow.complete("code=abc&state=other").await.unwrap_err();
+    assert!(error.contains("state mismatch"));
+    assert!(secrets.get("test-oauth-pending").await.unwrap().is_none());
 }
 
 #[tokio::test]

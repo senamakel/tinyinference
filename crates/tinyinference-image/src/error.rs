@@ -69,7 +69,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
     /// The storage port refused or failed to hold a generated artifact.
     #[error("storage error: {0}")]
-    Storage(#[from] tinystoragedrivers_core::StorageError),
+    Storage(#[from] tinystoragedrivers_types::StorageError),
     /// A JSON payload could not be encoded or decoded.
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
