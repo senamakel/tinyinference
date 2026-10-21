@@ -21,7 +21,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tinyinference-core = { version = "0.4.0", path = "../tinyinference-core" }
 # Storage ports only: generated media is written through a `BlobStore`.
-tinystoragedrivers-core = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
+tinystoragedrivers-core = { version = "=1.10.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "078d2dee0f299d97dbc22fa7210bd64098a4bf59" }
 tokio = { workspace = true, features = ["fs"] }
 tracing = { workspace = true }
 
