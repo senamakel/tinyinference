@@ -261,37 +261,431 @@ pub struct CallBudget {
     /// Conservative cost bound including prompt, cache, reasoning and output.
     pub cost_micros: u64,
 }
+
+/// A synchronous, provider-neutral check before dispatching a reserved model
+/// call and before each physical provider attempt.
+///
+/// The host can use this hook to recheck an absolute deadline or other
+/// admission policy after [`BudgetedModel`] has waited for monetary capacity.
+/// The check is repeated at each physical transport attempt, including a
+/// retry or a lazy stream's first poll. It must be quick and must not perform
+/// I/O. Implementations must tolerate repeated checks for the same logical
+/// call; a committed host permit should make this operation idempotent.
+pub trait BeforeDispatch: Send + Sync {
+    /// Returns an error when the reserved call must not reach the provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns the host's typed error when dispatch must be refused.
+    fn check(&self) -> crate::Result<()>;
+
+    /// Accounts one concrete physical provider send after the policy check.
+    ///
+    /// This is called once per transport send, including warm-up and retry
+    /// requests. The default keeps existing host adapters source compatible;
+    /// hosts that enforce a physical-send ceiling should override it.
+    /// With independent nested policies, an earlier policy can conservatively
+    /// admit an attempt before a later policy refuses it. These values bound
+    /// admitted sends and are not exact wire-send metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns the host's typed error when this physical send exceeds policy.
+    fn physical_attempt(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// Supplies a final dispatch policy to an existing provider without adding a
+/// monetary budget.
+///
+/// Built-in transports call `before_physical_attempt` immediately before
+/// each send. The wrapper scopes the hook across invocation and stream polling,
+/// and checks once before generic model work for compatibility with adapters
+/// that do not expose a separate physical-send seam.
+pub struct DispatchCheckedModel<State: Send + Sync> {
+    inner: Arc<dyn ChatModel<State>>,
+    before_dispatch: Arc<dyn BeforeDispatch>,
+}
+
+impl<State: Send + Sync> std::fmt::Debug for DispatchCheckedModel<State> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DispatchCheckedModel")
+            .finish_non_exhaustive()
+    }
+}
+
+impl<State: Send + Sync> DispatchCheckedModel<State> {
+    /// Wraps a provider with a host-owned synchronous dispatch check.
+    pub fn new(inner: Arc<dyn ChatModel<State>>, before_dispatch: Arc<dyn BeforeDispatch>) -> Self {
+        Self {
+            inner,
+            before_dispatch,
+        }
+    }
+}
+
+struct DispatchHookScope {
+    before_dispatch: Arc<dyn BeforeDispatch>,
+    attempt_gate: std::sync::Mutex<()>,
+    attempts: std::sync::atomic::AtomicUsize,
+}
+
+tokio::task_local! { static DISPATCH_HOOK: Vec<Arc<DispatchHookScope>>; }
+
+/// Admits an unbudgeted physical attempt made by a concrete provider.
+fn checked_unbudgeted_physical_attempt() -> crate::Result<Vec<Arc<DispatchHookScope>>> {
+    DISPATCH_HOOK
+        .try_with(|scope| {
+            for scope in scope {
+                scope.before_dispatch.check()?;
+            }
+            Ok(scope.clone())
+        })
+        .unwrap_or_else(|_| Ok(Vec::new()))
+}
+
+fn before_unbudgeted_physical_attempt() -> crate::Result<()> {
+    let scopes = checked_unbudgeted_physical_attempt()?;
+    let _attempts: Vec<_> = scopes
+        .iter()
+        .map(|scope| {
+            scope
+                .attempt_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        })
+        .collect();
+    for scope in &scopes {
+        scope.before_dispatch.physical_attempt()?;
+    }
+    for scope in &scopes {
+        scope
+            .attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+fn nested_dispatch_scopes(scope: Arc<DispatchHookScope>) -> Vec<Arc<DispatchHookScope>> {
+    let mut scopes = DISPATCH_HOOK.try_with(Clone::clone).unwrap_or_default();
+    scopes.push(scope);
+    scopes
+}
+
+#[async_trait]
+impl<State: Send + Sync> ChatModel<State> for DispatchCheckedModel<State> {
+    fn profile(&self) -> Option<&super::ModelProfile> {
+        self.inner.profile()
+    }
+
+    fn supports_input(
+        &self,
+        modality: super::InputModality,
+        mime: &str,
+        source: super::InputSource,
+    ) -> bool {
+        self.inner.supports_input(modality, mime, source)
+    }
+
+    fn cache_identity(&self) -> Option<String> {
+        self.inner.cache_identity()
+    }
+
+    fn tracks_physical_attempts(&self) -> bool {
+        self.inner.tracks_physical_attempts()
+    }
+
+    fn has_pre_invocation_admission_gate(&self) -> bool {
+        true
+    }
+
+    async fn fetch_deferred(
+        &self,
+        handle: &super::DeferredHandle,
+    ) -> crate::Result<super::DeferredStatus> {
+        if let Err(error) = self.before_dispatch.check() {
+            mark_dispatch_refused_before_invocation();
+            return Err(error);
+        }
+        if !self.inner.tracks_physical_attempts() && !self.inner.has_pre_invocation_admission_gate()
+        {
+            mark_untracked_inner_invoked();
+        }
+        let scope = Arc::new(DispatchHookScope {
+            before_dispatch: self.before_dispatch.clone(),
+            attempt_gate: std::sync::Mutex::new(()),
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+        });
+        DISPATCH_HOOK
+            .scope(
+                nested_dispatch_scopes(scope),
+                self.inner.fetch_deferred(handle),
+            )
+            .await
+    }
+
+    async fn invoke(&self, state: &State, request: ModelRequest) -> crate::Result<ModelResponse> {
+        if let Err(error) = self.before_dispatch.check() {
+            mark_dispatch_refused_before_invocation();
+            return Err(error);
+        }
+        if !self.inner.tracks_physical_attempts() && !self.inner.has_pre_invocation_admission_gate()
+        {
+            mark_untracked_inner_invoked();
+        }
+        let scope = Arc::new(DispatchHookScope {
+            before_dispatch: self.before_dispatch.clone(),
+            attempt_gate: std::sync::Mutex::new(()),
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+        });
+        DISPATCH_HOOK
+            .scope(
+                nested_dispatch_scopes(scope),
+                self.inner.invoke(state, request),
+            )
+            .await
+    }
+
+    async fn stream(&self, state: &State, request: ModelRequest) -> crate::Result<ModelStream> {
+        if let Err(error) = self.before_dispatch.check() {
+            mark_dispatch_refused_before_invocation();
+            return Err(error);
+        }
+        if !self.inner.tracks_physical_attempts() && !self.inner.has_pre_invocation_admission_gate()
+        {
+            mark_untracked_inner_invoked();
+        }
+        let scope = Arc::new(DispatchHookScope {
+            before_dispatch: self.before_dispatch.clone(),
+            attempt_gate: std::sync::Mutex::new(()),
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut dispatch_scopes = Some(nested_dispatch_scopes(Arc::clone(&scope)));
+        let stream = DISPATCH_HOOK
+            .scope(
+                dispatch_scopes
+                    .as_ref()
+                    .expect("dispatch scopes are initialized")
+                    .clone(),
+                self.inner.stream(state, request),
+            )
+            .await?;
+        let metadata = stream.metadata().clone();
+        let mut stream = Box::pin(stream);
+        let mut scope = Some(scope);
+        let guarded = futures::stream::poll_fn(move |cx| {
+            let Some(current_scope) = scope.as_ref().cloned() else {
+                return std::task::Poll::Ready(None);
+            };
+            let Some(mut current_scopes) = dispatch_scopes.as_ref().cloned() else {
+                return std::task::Poll::Ready(None);
+            };
+            if !current_scopes
+                .iter()
+                .any(|scope| Arc::ptr_eq(scope, &current_scope))
+            {
+                current_scopes.push(current_scope);
+            }
+            let item = DISPATCH_HOOK.sync_scope(current_scopes, || {
+                futures::Stream::poll_next(stream.as_mut(), cx)
+            });
+            if matches!(
+                &item,
+                std::task::Poll::Ready(Some(
+                    ModelStreamItem::Completed(_)
+                        | ModelStreamItem::Failed(_)
+                        | ModelStreamItem::ProviderFailed(_)
+                        | ModelStreamItem::Deferred(_)
+                )) | std::task::Poll::Ready(None)
+            ) {
+                scope.take();
+                dispatch_scopes.take();
+            }
+            item
+        });
+        Ok(ModelStream::new(Box::pin(guarded)).with_metadata(metadata))
+    }
+}
+
 // Concrete transports call this before sending: adapters may retry request
 // shape internally, below ChatModel. The first attempt owns the outer permit;
 // each extra attempt is conservatively charged before dispatch.
 struct AttemptScope {
     budget: Budget,
     requested: Spend,
+    before_dispatch: Option<Arc<dyn BeforeDispatch>>,
+    has_pre_invocation_admission_gate: bool,
+    attempt_gate: std::sync::Mutex<()>,
     attempts: std::sync::atomic::AtomicUsize,
+    refused_before_attempt: std::sync::atomic::AtomicBool,
+    untracked_inner_invoked: std::sync::atomic::AtomicBool,
 }
-tokio::task_local! { static PHYSICAL_CALL: Arc<AttemptScope>; }
+
+impl AttemptScope {
+    fn can_refund_before_first_attempt(&self) -> bool {
+        (self
+            .refused_before_attempt
+            .load(std::sync::atomic::Ordering::SeqCst)
+            || self.has_pre_invocation_admission_gate)
+            && self.attempts.load(std::sync::atomic::Ordering::SeqCst) == 0
+            && !self
+                .untracked_inner_invoked
+                .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+tokio::task_local! { static PHYSICAL_CALL: Vec<Arc<AttemptScope>>; }
+
+fn mark_physical_refused_before_attempt() {
+    let _ = PHYSICAL_CALL.try_with(|scopes| {
+        for scope in scopes {
+            scope
+                .refused_before_attempt
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+}
+
+fn mark_dispatch_refused_before_invocation() {
+    let _ = PHYSICAL_CALL.try_with(|scopes| {
+        for scope in scopes {
+            scope
+                .refused_before_attempt
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+}
+
+fn mark_untracked_inner_invoked() {
+    let _ = PHYSICAL_CALL.try_with(|scopes| {
+        for scope in scopes {
+            scope
+                .untracked_inner_invoked
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+}
+
+pub(super) fn mark_untracked_fallback_child_invoked() {
+    mark_untracked_inner_invoked();
+}
+
+fn nested_attempt_scopes(scope: Arc<AttemptScope>) -> Vec<Arc<AttemptScope>> {
+    let mut scopes = PHYSICAL_CALL.try_with(Clone::clone).unwrap_or_default();
+    scopes.push(scope);
+    scopes
+}
 /// Admit an extra physical attempt made internally by a concrete provider.
 ///
-/// Outside a budgeted invocation this is a no-op. The first attempt uses the
-/// invocation reservation; later attempts must atomically reserve again.
-pub(crate) fn before_physical_attempt() -> crate::Result<()> {
+/// The first attempt uses the invocation reservation; later attempts must
+/// atomically reserve again. Checks active dispatch and budget scopes
+/// immediately before a physical provider send. Provider implementations
+/// should call this for every send,
+/// including retries, and report [`ChatModel::tracks_physical_attempts`] as
+/// true only when every send is covered.
+///
+/// Retry admission is synchronous and does not wait for live reservations to
+/// settle. When a wait-mode budget cannot reserve a retry only because of live
+/// capacity, this returns [`crate::Error::BudgetExceeded`] without publishing
+/// a terminal refusal through [`Budget::refusal`]. A retry that settled spend
+/// cannot afford remains a terminal refusal.
+///
+/// Outside an active budgeted or dispatch-checked invocation this is a no-op.
+pub fn before_physical_attempt() -> crate::Result<()> {
     PHYSICAL_CALL
-        .try_with(|scope| {
-            if scope
-                .attempts
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                == 0
-            {
-                return Ok(());
+        .try_with(|scopes| {
+            let _attempts: Vec<_> = scopes
+                .iter()
+                .map(|scope| {
+                    scope
+                        .attempt_gate
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                })
+                .collect();
+            for scope in scopes {
+                if let Some(hook) = &scope.before_dispatch
+                    && let Err(error) = hook.check()
+                {
+                    mark_physical_refused_before_attempt();
+                    return Err(error);
+                }
             }
-            let reservation = scope
-                .budget
-                .reserve(scope.requested)
-                .map_err(crate::Error::BudgetExceeded)?;
-            drop(reservation);
+            // A DispatchCheckedModel may wrap this budgeted model. Its
+            // independent admission scope must also be checked at every
+            // physical send, including provider retries.
+            let dispatch_scopes = match checked_unbudgeted_physical_attempt() {
+                Ok(scope) => scope,
+                Err(error) => {
+                    mark_physical_refused_before_attempt();
+                    return Err(error);
+                }
+            };
+            // Reserve retry money before consuming a host call slot. A denied
+            // monetary reservation therefore never charges an unsent attempt.
+            let mut retry_reservations = Vec::new();
+            for scope in scopes {
+                if scope.attempts.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                    match scope
+                        .budget
+                        .reserve_inner(scope.requested, scope.budget.wait_capacity)
+                    {
+                        Ok(reservation) => retry_reservations.push(reservation),
+                        Err(refusal) => {
+                            for reservation in retry_reservations {
+                                reservation.settle(Spend::default());
+                            }
+                            mark_physical_refused_before_attempt();
+                            return Err(crate::Error::BudgetExceeded(refusal.error));
+                        }
+                    }
+                }
+            }
+            let _dispatch_attempts: Vec<_> = dispatch_scopes
+                .iter()
+                .map(|scope| {
+                    scope
+                        .attempt_gate
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                })
+                .collect();
+            for scope in scopes {
+                if let Some(hook) = &scope.before_dispatch
+                    && let Err(error) = hook.physical_attempt()
+                {
+                    mark_physical_refused_before_attempt();
+                    for reservation in retry_reservations {
+                        reservation.settle(Spend::default());
+                    }
+                    return Err(error);
+                }
+            }
+            for dispatch_scope in &dispatch_scopes {
+                if let Err(error) = dispatch_scope.before_dispatch.physical_attempt() {
+                    mark_physical_refused_before_attempt();
+                    for reservation in retry_reservations {
+                        reservation.settle(Spend::default());
+                    }
+                    return Err(error);
+                }
+            }
+            for dispatch_scope in &dispatch_scopes {
+                dispatch_scope
+                    .attempts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            for scope in scopes {
+                scope
+                    .attempts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            // An accepted attempt remains charged even if the HTTP send fails.
+            drop(retry_reservations);
             Ok(())
         })
-        .unwrap_or(Ok(()))
+        .unwrap_or_else(|_| before_unbudgeted_physical_attempt())
 }
 
 /// Applies a shared budget to a concrete provider, before every invocation.
@@ -299,6 +693,7 @@ pub struct BudgetedModel<State: Send + Sync> {
     inner: Arc<dyn ChatModel<State>>,
     budget: Budget,
     call: CallBudget,
+    before_dispatch: Option<Arc<dyn BeforeDispatch>>,
 }
 impl<State: Send + Sync> std::fmt::Debug for BudgetedModel<State> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -315,7 +710,16 @@ impl<State: Send + Sync> BudgetedModel<State> {
             inner,
             budget,
             call,
+            before_dispatch: None,
         }
+    }
+
+    /// Install a synchronous policy check after monetary admission, before
+    /// provider invocation or stream construction, and before each physical
+    /// transport attempt.
+    pub fn before_dispatch(mut self, hook: Arc<dyn BeforeDispatch>) -> Self {
+        self.before_dispatch = Some(hook);
+        self
     }
     async fn admit(&self, request: &mut ModelRequest) -> crate::Result<Reservation> {
         if ["max_tokens", "max_completion_tokens", "max_output_tokens"]
@@ -408,6 +812,14 @@ impl<State: Send + Sync> ChatModel<State> for BudgetedModel<State> {
     fn cache_identity(&self) -> Option<String> {
         self.inner.cache_identity()
     }
+
+    fn tracks_physical_attempts(&self) -> bool {
+        self.inner.tracks_physical_attempts()
+    }
+
+    fn has_pre_invocation_admission_gate(&self) -> bool {
+        true
+    }
     async fn invoke(
         &self,
         state: &State,
@@ -417,11 +829,40 @@ impl<State: Send + Sync> ChatModel<State> for BudgetedModel<State> {
         let scope = Arc::new(AttemptScope {
             budget: self.budget.clone(),
             requested: reservation.requested,
+            before_dispatch: self.before_dispatch.clone(),
+            has_pre_invocation_admission_gate: self.inner.has_pre_invocation_admission_gate(),
+            attempt_gate: std::sync::Mutex::new(()),
             attempts: std::sync::atomic::AtomicUsize::new(0),
+            refused_before_attempt: std::sync::atomic::AtomicBool::new(false),
+            untracked_inner_invoked: std::sync::atomic::AtomicBool::new(false),
         });
-        let response = PHYSICAL_CALL
-            .scope(scope, self.inner.invoke(state, request))
-            .await?;
+        if let Some(hook) = &self.before_dispatch
+            && let Err(error) = hook.check()
+        {
+            reservation.settle(Spend::default());
+            return Err(error);
+        }
+        if !self.inner.tracks_physical_attempts() && !self.inner.has_pre_invocation_admission_gate()
+        {
+            mark_untracked_inner_invoked();
+            scope
+                .untracked_inner_invoked
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        let response = match PHYSICAL_CALL
+            .scope(
+                nested_attempt_scopes(Arc::clone(&scope)),
+                self.inner.invoke(state, request),
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if scope.can_refund_before_first_attempt() => {
+                reservation.settle(Spend::default());
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         Self::settle(reservation, &response);
         Ok(response)
     }
@@ -430,18 +871,64 @@ impl<State: Send + Sync> ChatModel<State> for BudgetedModel<State> {
         let scope = Arc::new(AttemptScope {
             budget: self.budget.clone(),
             requested: reservation.requested,
+            before_dispatch: self.before_dispatch.clone(),
+            has_pre_invocation_admission_gate: self.inner.has_pre_invocation_admission_gate(),
+            attempt_gate: std::sync::Mutex::new(()),
             attempts: std::sync::atomic::AtomicUsize::new(0),
+            refused_before_attempt: std::sync::atomic::AtomicBool::new(false),
+            untracked_inner_invoked: std::sync::atomic::AtomicBool::new(false),
         });
-        let stream = PHYSICAL_CALL
-            .scope(Arc::clone(&scope), self.inner.stream(state, request))
-            .await?;
+        if let Some(hook) = &self.before_dispatch
+            && let Err(error) = hook.check()
+        {
+            reservation.settle(Spend::default());
+            return Err(error);
+        }
+        if !self.inner.tracks_physical_attempts() && !self.inner.has_pre_invocation_admission_gate()
+        {
+            mark_untracked_inner_invoked();
+            scope
+                .untracked_inner_invoked
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        let mut attempt_scopes = Some(nested_attempt_scopes(Arc::clone(&scope)));
+        let stream = match PHYSICAL_CALL
+            .scope(
+                attempt_scopes
+                    .as_ref()
+                    .expect("attempt scopes are initialized")
+                    .clone(),
+                self.inner.stream(state, request),
+            )
+            .await
+        {
+            Ok(stream) => stream,
+            Err(error) if scope.can_refund_before_first_attempt() => {
+                reservation.settle(Spend::default());
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         let metadata = stream.metadata().clone();
         let mut stream = Box::pin(stream);
         let mut reservation = Some(reservation);
+        let mut scope = Some(scope);
         // Lazy providers can send/retry while polled; retain the same attempt
         // counter and admission scope over both construction and consumption.
         let stream = futures::stream::poll_fn(move |cx| {
-            PHYSICAL_CALL.sync_scope(Arc::clone(&scope), || {
+            let Some(current_scope) = scope.as_ref().cloned() else {
+                return std::task::Poll::Ready(None);
+            };
+            let Some(mut current_scopes) = attempt_scopes.as_ref().cloned() else {
+                return std::task::Poll::Ready(None);
+            };
+            if !current_scopes
+                .iter()
+                .any(|scope| Arc::ptr_eq(scope, &current_scope))
+            {
+                current_scopes.push(current_scope.clone());
+            }
+            let item = PHYSICAL_CALL.sync_scope(current_scopes, || {
                 let item = futures::Stream::poll_next(stream.as_mut(), cx);
                 match &item {
                     std::task::Poll::Ready(Some(ModelStreamItem::Completed(response))) => {
@@ -454,11 +941,34 @@ impl<State: Send + Sync> ChatModel<State> for BudgetedModel<State> {
                         | ModelStreamItem::ProviderFailed(_)
                         | ModelStreamItem::Deferred(_),
                     ))
-                    | std::task::Poll::Ready(None) => drop(reservation.take()),
+                    | std::task::Poll::Ready(None) => {
+                        if current_scope.can_refund_before_first_attempt() {
+                            if let Some(reservation) = reservation.take() {
+                                reservation.settle(Spend::default());
+                            }
+                        } else {
+                            drop(reservation.take());
+                        }
+                    }
                     _ => (),
                 }
                 item
-            })
+            });
+            if matches!(
+                &item,
+                std::task::Poll::Ready(Some(
+                    ModelStreamItem::Completed(_)
+                        | ModelStreamItem::Failed(_)
+                        | ModelStreamItem::ProviderFailed(_)
+                        | ModelStreamItem::Deferred(_)
+                )) | std::task::Poll::Ready(None)
+            ) {
+                // Drop the host permit at terminal delivery, even if the
+                // caller retains the fused stream object for later polling.
+                scope.take();
+                attempt_scopes.take();
+            }
+            item
         });
         Ok(ModelStream::new(Box::pin(stream)).with_metadata(metadata))
     }

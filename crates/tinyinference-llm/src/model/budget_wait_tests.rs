@@ -303,3 +303,38 @@ async fn temporary_wait_preserves_an_existing_fail_fast_refusal() {
     assert_eq!(budget.refusal().unwrap().requested, original.requested);
     admitted.settle(spend(10));
 }
+
+#[derive(Debug)]
+struct RefuseDispatch;
+impl super::BeforeDispatch for RefuseDispatch {
+    fn check(&self) -> crate::Result<()> {
+        Err(crate::Error::Validation("soft deadline elapsed".into()))
+    }
+}
+
+#[tokio::test]
+async fn before_dispatch_rechecks_after_wait_and_refunds_unspent_reservation() {
+    let ledger = cost_ledger(150).wait_for_capacity();
+    let inner = Arc::new(GatedModel::default());
+    let admitted = BudgetedModel::new(inner.clone(), ledger.clone(), policy());
+    let refused = BudgetedModel::new(inner.clone(), ledger.clone(), policy())
+        .before_dispatch(Arc::new(RefuseDispatch));
+    let mut first = Box::pin(admitted.invoke(&(), request()));
+    let mut waiting = Box::pin(refused.invoke(&(), request()));
+
+    assert!(poll!(first.as_mut()).is_pending());
+    assert!(poll!(waiting.as_mut()).is_pending());
+    assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(ledger.snapshot().reserved.cost_micros, 100);
+
+    inner.release.add_permits(1);
+    assert!(matches!(poll!(first.as_mut()), Poll::Ready(Ok(_))));
+    assert!(matches!(
+        poll!(waiting.as_mut()),
+        Poll::Ready(Err(crate::Error::Validation(message))) if message == "soft deadline elapsed"
+    ));
+
+    assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(ledger.snapshot().spent.cost_micros, 10);
+    assert_eq!(ledger.snapshot().reserved, Spend::default());
+}

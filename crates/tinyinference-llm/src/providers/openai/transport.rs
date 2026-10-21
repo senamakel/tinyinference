@@ -1145,10 +1145,12 @@ impl OpenAiModel {
             local_options_object(&self.default_provider_options),
             self.keep_alive.as_deref(),
         );
-        let response = self
+        let request = self
             .authorized(self.http_client().post(&url))
             .await?
-            .json(&body)
+            .json(&body);
+        crate::model::budget::before_physical_attempt()?;
+        let response = request
             .send()
             .await
             .map_err(|error| Error::Model(format!("openai warm-up of {url} failed: {error}")))?;
@@ -2155,6 +2157,10 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
     /// Returns the capability profile derived from the configured model id.
     fn profile(&self) -> Option<&ModelProfile> {
         Some(&self.profile)
+    }
+
+    fn tracks_physical_attempts(&self) -> bool {
+        true
     }
 
     fn supports_input(

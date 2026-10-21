@@ -214,10 +214,30 @@ impl<State: Send + Sync> ChatModel<State> for FallbackModel<State> {
             .all(|model| model.supports_input(modality, mime_type, source))
     }
 
+    fn tracks_physical_attempts(&self) -> bool {
+        self.models
+            .iter()
+            .all(|model| model.tracks_physical_attempts())
+    }
+
+    fn has_pre_invocation_admission_gate(&self) -> bool {
+        // This composite marks each opaque child only when it is entered, so
+        // an earlier gated refusal can be refunded without risking a refund
+        // after a later opaque child may have sent.
+        true
+    }
+
     /// Returns the selected response unchanged, or the last eligible failure.
     async fn invoke(&self, state: &State, request: ModelRequest) -> Result<ModelResponse> {
         let mut last = Error::Model("model chain is empty".into());
         for model in &self.models {
+            // A mixed chain cannot advertise a universal gate. Mark only when
+            // we actually enter an opaque child, so an earlier gated refusal
+            // remains refundable while a possibly-paid opaque child stays
+            // conservatively charged.
+            if !model.tracks_physical_attempts() && !model.has_pre_invocation_admission_gate() {
+                super::budget::mark_untracked_fallback_child_invoked();
+            }
             match model.invoke(state, request.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(error) if can_fallback(&error) => last = error,
@@ -235,6 +255,9 @@ impl<State: Send + Sync> ChatModel<State> for FallbackModel<State> {
     async fn stream(&self, state: &State, request: ModelRequest) -> Result<ModelStream> {
         let mut last = Error::Model("model chain is empty".into());
         for (adapter, model) in self.models.iter().enumerate() {
+            if !model.tracks_physical_attempts() && !model.has_pre_invocation_admission_gate() {
+                super::budget::mark_untracked_fallback_child_invoked();
+            }
             let mut stream = match model.stream(state, request.clone()).await {
                 Ok(stream) => stream,
                 Err(error) if can_fallback(&error) => {
@@ -302,6 +325,9 @@ impl<State: Send + Sync> ChatModel<State> for FallbackModel<State> {
             return Err(Error::Validation(
                 "deferred adapter identity or route version does not match".into(),
             ));
+        }
+        if !model.tracks_physical_attempts() && !model.has_pre_invocation_admission_gate() {
+            super::budget::mark_untracked_fallback_child_invoked();
         }
         model.fetch_deferred(&route.original).await
     }
