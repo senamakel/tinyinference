@@ -361,6 +361,7 @@ impl AnthropicModel {
             (false, Some(timeout_ms)) => request_builder.timeout(Duration::from_millis(timeout_ms)),
             _ => request_builder,
         };
+        crate::model::budget::before_physical_attempt()?;
         let response = request_builder.send().await.map_err(|error| {
             Error::Provider(Box::new(self.provider_error(
                 request,
@@ -485,6 +486,10 @@ impl<State: Send + Sync> ChatModel<State> for AnthropicModel {
             self.base_url,
             self.model
         ))
+    }
+
+    fn tracks_physical_attempts(&self) -> bool {
+        true
     }
 
     async fn invoke(&self, _state: &State, request: ModelRequest) -> Result<ModelResponse> {

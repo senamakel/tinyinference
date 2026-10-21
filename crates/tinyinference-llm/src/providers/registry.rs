@@ -455,6 +455,9 @@ impl ChatModel<()> for LocalRegistryModel {
     fn cache_identity(&self) -> Option<String> {
         <super::openai::OpenAiModel as ChatModel<()>>::cache_identity(&self.model)
     }
+    fn tracks_physical_attempts(&self) -> bool {
+        <super::openai::OpenAiModel as ChatModel<()>>::tracks_physical_attempts(&self.model)
+    }
     async fn invoke(
         &self,
         state: &(),
