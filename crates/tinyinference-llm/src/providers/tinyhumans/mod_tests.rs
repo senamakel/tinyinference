@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct Fixture {
     requests: Arc<std::sync::Mutex<Vec<(HeaderMap, Value)>>>,
     response: Arc<std::sync::Mutex<FixtureResponse>>,
+    rotate_token_before_response: Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<String>>>>>,
 }
 
 #[derive(Clone)]
@@ -49,6 +50,9 @@ fn completion_body() -> String {
 async fn chat(State(fixture): State<Fixture>, headers: HeaderMap, body: String) -> Response {
     let body: Value = serde_json::from_str(&body).expect("request JSON");
     fixture.requests.lock().unwrap().push((headers, body));
+    if let Some(token) = fixture.rotate_token_before_response.lock().unwrap().take() {
+        *token.lock().unwrap() = "new-session-token".to_owned();
+    }
     let response = fixture.response.lock().unwrap().clone();
     Response::builder()
         .status(response.status)
@@ -773,6 +777,45 @@ async fn managed_auth_failure_reports_the_credential_its_request_carried() {
             ),
         ]
     );
+}
+
+#[tokio::test]
+async fn managed_auth_failure_carries_a_non_secret_request_credential_fingerprint() {
+    let fixture = Fixture::default();
+    let base = serve(fixture.clone()).await;
+    *fixture.response.lock().unwrap() = FixtureResponse {
+        status: StatusCode::UNAUTHORIZED,
+        content_type: "application/json",
+        body: json!({ "error": { "message": "Unauthorized" } }).to_string(),
+    };
+    let token = Arc::new(std::sync::Mutex::new("old-request-token".to_owned()));
+    *fixture.rotate_token_before_response.lock().unwrap() = Some(token.clone());
+    let token_for_resolver = token.clone();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_by_handler = seen.clone();
+    let model = TinyHumansModel::new_with_credential(base, "", "default-model", move || {
+        Ok(TinyHumansCredential {
+            bearer: token_for_resolver.lock().unwrap().clone(),
+            kind: TinyHumansCredentialKind::Session,
+        })
+    })
+    .unwrap()
+    .with_managed_auth_failure_handler(move |_, failure| {
+        seen_by_handler
+            .lock()
+            .unwrap()
+            .push(failure.credential_fingerprint());
+    });
+
+    let request = ModelRequest::new(vec![crate::message::Message::user("hi")]);
+    assert!(model.invoke(&(), request).await.is_err());
+    assert_eq!(*token.lock().unwrap(), "new-session-token");
+
+    let fingerprints = seen.lock().unwrap();
+    let fingerprint = fingerprints[0].expect("managed credential fingerprint");
+    assert!(fingerprint.matches_bearer("old-request-token"));
+    assert!(!fingerprint.matches_bearer("new-session-token"));
+    assert!(!format!("{fingerprint:?}").contains("old-request-token"));
 }
 
 #[tokio::test]
