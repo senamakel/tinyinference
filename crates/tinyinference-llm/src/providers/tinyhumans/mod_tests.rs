@@ -818,6 +818,22 @@ async fn managed_auth_failure_carries_a_non_secret_request_credential_fingerprin
     assert!(!format!("{fingerprint:?}").contains("old-request-token"));
 }
 
+#[test]
+fn credential_fingerprint_has_a_stable_opaque_hex_round_trip() {
+    let fingerprint = TinyHumansCredentialFingerprint::from_bearer("session-token");
+    let encoded = fingerprint.to_hex();
+
+    assert_eq!(encoded.len(), 64);
+    assert!(encoded.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+    assert_eq!(TinyHumansCredentialFingerprint::from_hex(&encoded), Some(fingerprint));
+    assert_eq!(
+        TinyHumansCredentialFingerprint::from_hex(&encoded.to_ascii_uppercase()),
+        None,
+        "the serialized form is canonical lower-case hex"
+    );
+    assert_eq!(TinyHumansCredentialFingerprint::from_hex("xyz"), None);
+}
+
 #[tokio::test]
 async fn a_plain_bearer_resolver_reports_no_credential_kind() {
     let fixture = Fixture::default();
