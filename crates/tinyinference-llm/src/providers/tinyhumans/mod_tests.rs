@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct Fixture {
     requests: Arc<std::sync::Mutex<Vec<(HeaderMap, Value)>>>,
     response: Arc<std::sync::Mutex<FixtureResponse>>,
+    rotate_token_before_response: Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<String>>>>>,
 }
 
 #[derive(Clone)]
@@ -49,6 +50,9 @@ fn completion_body() -> String {
 async fn chat(State(fixture): State<Fixture>, headers: HeaderMap, body: String) -> Response {
     let body: Value = serde_json::from_str(&body).expect("request JSON");
     fixture.requests.lock().unwrap().push((headers, body));
+    if let Some(token) = fixture.rotate_token_before_response.lock().unwrap().take() {
+        *token.lock().unwrap() = "new-session-token".to_owned();
+    }
     let response = fixture.response.lock().unwrap().clone();
     Response::builder()
         .status(response.status)
@@ -785,6 +789,7 @@ async fn managed_auth_failure_carries_a_non_secret_request_credential_fingerprin
         body: json!({ "error": { "message": "Unauthorized" } }).to_string(),
     };
     let token = Arc::new(std::sync::Mutex::new("old-request-token".to_owned()));
+    *fixture.rotate_token_before_response.lock().unwrap() = Some(token.clone());
     let token_for_resolver = token.clone();
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen_by_handler = seen.clone();
@@ -804,7 +809,7 @@ async fn managed_auth_failure_carries_a_non_secret_request_credential_fingerprin
 
     let request = ModelRequest::new(vec![crate::message::Message::user("hi")]);
     assert!(model.invoke(&(), request).await.is_err());
-    *token.lock().unwrap() = "new-session-token".to_owned();
+    assert_eq!(*token.lock().unwrap(), "new-session-token");
 
     let fingerprints = seen.lock().unwrap();
     let fingerprint = fingerprints[0].expect("managed credential fingerprint");
