@@ -68,6 +68,36 @@ impl TinyHumansCredentialFingerprint {
         Self(digest.finalize().into())
     }
 
+    /// Returns the canonical lower-case hexadecimal representation of this
+    /// fingerprint. The bearer is not recoverable from this representation.
+    #[must_use]
+    pub fn to_hex(self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = String::with_capacity(self.0.len() * 2);
+        for byte in self.0 {
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        encoded
+    }
+
+    /// Parses a canonical lower-case hexadecimal fingerprint representation.
+    ///
+    /// Returns `None` when `encoded` is not exactly 64 lower-case hex digits.
+    #[must_use]
+    pub fn from_hex(encoded: &str) -> Option<Self> {
+        if encoded.len() != 64 {
+            return None;
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, pair) in encoded.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+            let high = decode_lower_hex(pair[0])?;
+            let low = decode_lower_hex(pair[1])?;
+            bytes[index] = (high << 4) | low;
+        }
+        Some(Self(bytes))
+    }
+
     /// Returns whether this fingerprint belongs to `bearer`.
     #[must_use]
     pub fn matches_bearer(self, bearer: &str) -> bool {
@@ -78,6 +108,14 @@ impl TinyHumansCredentialFingerprint {
             .zip(candidate.0.iter())
             .fold(0_u8, |different, (left, right)| different | (left ^ right))
             == 0
+    }
+}
+
+fn decode_lower_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
     }
 }
 
