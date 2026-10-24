@@ -824,8 +824,15 @@ fn credential_fingerprint_has_a_stable_opaque_hex_round_trip() {
     let encoded = fingerprint.to_hex();
 
     assert_eq!(encoded.len(), 64);
-    assert!(encoded.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
-    assert_eq!(TinyHumansCredentialFingerprint::from_hex(&encoded), Some(fingerprint));
+    assert!(
+        encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    assert_eq!(
+        TinyHumansCredentialFingerprint::from_hex(&encoded),
+        Some(fingerprint)
+    );
     assert_eq!(
         TinyHumansCredentialFingerprint::from_hex(&encoded.to_ascii_uppercase()),
         None,
