@@ -63,7 +63,7 @@ pub struct TinyHumansCredentialFingerprint([u8; 32]);
 impl TinyHumansCredentialFingerprint {
     fn from_bearer(bearer: &str) -> Self {
         let mut digest = Sha256::new();
-        digest.update(b"tinyinference/tinyhumans-credential-fingerprint/v1\\0");
+        digest.update(b"tinyinference/tinyhumans-credential-fingerprint/v1\0");
         digest.update(bearer.as_bytes());
         Self(digest.finalize().into())
     }
