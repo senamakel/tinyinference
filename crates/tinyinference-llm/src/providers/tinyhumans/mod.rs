@@ -90,7 +90,7 @@ impl TinyHumansCredentialFingerprint {
             return None;
         }
         let mut bytes = [0_u8; 32];
-        for (index, pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
+        for (index, pair) in encoded.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let high = decode_lower_hex(pair[0])?;
             let low = decode_lower_hex(pair[1])?;
             bytes[index] = (high << 4) | low;
