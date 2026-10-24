@@ -13,6 +13,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 use tinyinference_core::sanitize;
 
 use crate::model::{
@@ -51,11 +52,51 @@ pub struct TinyHumansCredential {
 type KindedResolver =
     Arc<dyn Fn() -> Result<(String, Option<TinyHumansCredentialKind>)> + Send + Sync>;
 
+/// Opaque, non-secret identity for a bearer credential used by one request.
+///
+/// The fingerprint is a domain-separated SHA-256 digest. It supports comparing
+/// the credential used by a failed request with a host's current bearer without
+/// retaining or exposing the bearer itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct TinyHumansCredentialFingerprint([u8; 32]);
+
+impl TinyHumansCredentialFingerprint {
+    fn from_bearer(bearer: &str) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(b"tinyinference/tinyhumans-credential-fingerprint/v1\\0");
+        digest.update(bearer.as_bytes());
+        Self(digest.finalize().into())
+    }
+
+    /// Returns whether this fingerprint belongs to `bearer`.
+    #[must_use]
+    pub fn matches_bearer(self, bearer: &str) -> bool {
+        let candidate = Self::from_bearer(bearer);
+        // Compare the fixed-width digest without early exit.
+        self.0
+            .iter()
+            .zip(candidate.0.iter())
+            .fold(0_u8, |different, (left, right)| different | (left ^ right))
+            == 0
+    }
+}
+
+impl std::fmt::Debug for TinyHumansCredentialFingerprint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TinyHumansCredentialFingerprint(<opaque>)")
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SentCredential {
+    kind: Option<TinyHumansCredentialKind>,
+    fingerprint: TinyHumansCredentialFingerprint,
+}
+
 tokio::task_local! {
-    /// The credential kind the bearer source handed to the request being
-    /// dispatched in this task, so a failure is attributed to the credential
-    /// that request carried rather than to whatever was resolved last.
-    static SENT_CREDENTIAL: std::cell::Cell<Option<TinyHumansCredentialKind>>;
+    /// Request-time credential identity so a failure is attributed to the
+    /// credential actually sent, rather than whichever one resolves later.
+    static SENT_CREDENTIAL: std::cell::Cell<Option<SentCredential>>;
 }
 
 /// Operation that received a provider authentication failure.
@@ -102,6 +143,7 @@ pub struct TinyHumansAuthFailure {
     operation: TinyHumansOperation,
     kind: TinyHumansAuthFailureKind,
     credential: Option<TinyHumansCredentialKind>,
+    credential_fingerprint: Option<TinyHumansCredentialFingerprint>,
 }
 
 impl TinyHumansAuthFailure {
@@ -123,6 +165,13 @@ impl TinyHumansAuthFailure {
     #[must_use]
     pub fn credential(self) -> Option<TinyHumansCredentialKind> {
         self.credential
+    }
+
+    /// The opaque identity of the bearer sent with the failed request, when
+    /// the request used a managed credential resolver.
+    #[must_use]
+    pub fn credential_fingerprint(self) -> Option<TinyHumansCredentialFingerprint> {
+        self.credential_fingerprint
     }
 }
 
@@ -409,7 +458,7 @@ impl TinyHumansModel {
         &self,
         error: &Error,
         operation: TinyHumansOperation,
-        credential: Option<TinyHumansCredentialKind>,
+        credential: Option<SentCredential>,
     ) {
         if let Error::Provider(provider_error) = error
             && is_auth_failure(provider_error)
@@ -428,7 +477,7 @@ impl TinyHumansModel {
         &self,
         error: &ProviderError,
         operation: TinyHumansOperation,
-        credential: Option<TinyHumansCredentialKind>,
+        credential: Option<SentCredential>,
     ) {
         if let Some(handler) = &self.auth_failure_handler {
             handler(error, operation);
@@ -439,7 +488,8 @@ impl TinyHumansModel {
                 TinyHumansAuthFailure {
                     operation,
                     kind: auth_failure_kind(error),
-                    credential,
+                    credential: credential.and_then(|sent| sent.kind),
+                    credential_fingerprint: credential.map(|sent| sent.fingerprint),
                 },
             );
         }
@@ -515,7 +565,8 @@ impl ChatModel<()> for TinyHumansModel {
                             TinyHumansAuthFailure {
                                 operation: TinyHumansOperation::Stream,
                                 kind: auth_failure_kind(&error),
-                                credential,
+                                credential: credential.and_then(|sent| sent.kind),
+                                credential_fingerprint: credential.map(|sent| sent.fingerprint),
                             },
                         );
                     }
@@ -582,7 +633,11 @@ impl BearerSource for ResolvedBearer {
         let (bearer, kind) = (self.0)()?;
         // Outside a dispatch scope (e.g. the readiness probe) there is nothing
         // to attribute, so a missing task-local is fine.
-        let _ = SENT_CREDENTIAL.try_with(|sent| sent.set(kind));
+        let sent = SentCredential {
+            kind,
+            fingerprint: TinyHumansCredentialFingerprint::from_bearer(&bearer),
+        };
+        let _ = SENT_CREDENTIAL.try_with(|credential| credential.set(Some(sent)));
         Ok(Some(bearer))
     }
 }
