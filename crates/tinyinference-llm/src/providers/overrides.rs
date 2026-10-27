@@ -227,6 +227,7 @@ pub type CatalogListing<Ctx> =
 pub type CatalogLimitsFuture = BoxFuture<Option<DiscoveryRequest>>;
 
 /// Input to an async provider catalog limits resolver.
+#[derive(Debug)]
 pub struct CatalogLimitsRequest<Ctx> {
     /// Model whose supported limits are being discovered.
     pub model: String,
