@@ -1,11 +1,13 @@
 use super::*;
 
 fn missing_bearer() -> BearerResolver {
-    Arc::new(|| Box::pin(async {
-        Err(Error::Validation(
-            "No backend session for cloud embeddings".into(),
-        ))
-    }))
+    Arc::new(|| {
+        Box::pin(async {
+            Err(Error::Validation(
+                "No backend session for cloud embeddings".into(),
+            ))
+        })
+    })
 }
 
 #[test]

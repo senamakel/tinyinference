@@ -31,9 +31,8 @@ pub use reasoning::{REASONING_OFF_METADATA_KEY, apply_reasoning, with_thread_id}
 pub use usage::project_tinyhumans_envelope;
 
 /// Resolves the current bearer credential for a managed inference call.
-pub type BearerResolver = Arc<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync,
->;
+pub type BearerResolver =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
 
 /// Which kind of credential a managed request authenticated with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

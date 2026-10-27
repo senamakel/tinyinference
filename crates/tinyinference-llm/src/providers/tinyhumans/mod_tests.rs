@@ -96,7 +96,7 @@ fn fixture_model(base: &str) -> TinyHumansModel {
     TinyHumansModel::new(base, "", "default-model", || {
         Box::pin(async { Ok("test-token".into()) })
     })
-        .expect("model construction")
+    .expect("model construction")
 }
 
 #[tokio::test]
