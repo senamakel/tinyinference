@@ -41,13 +41,15 @@ async fn asynchronous_factories_accept_borrowed_non_clone_host_contexts() {
         },
         |id| {
             (id == "hosted").then(|| {
-                Arc::new(|request: EmbeddingRequest<'_, HostContext<'_>>| -> EmbeddingFactoryFuture<'_> {
-                    Box::pin(async move {
-                        assert_eq!(request.context.borrowed_config, "borrowed-host-config");
-                        Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
-                            as Box<dyn EmbeddingModel>)
-                    })
-                }) as _
+                Arc::new(
+                    |request: EmbeddingRequest<'_, HostContext<'_>>| -> EmbeddingFactoryFuture<'_> {
+                        Box::pin(async move {
+                            assert_eq!(request.context.borrowed_config, "borrowed-host-config");
+                            Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
+                                as Box<dyn EmbeddingModel>)
+                        })
+                    },
+                ) as _
             })
         },
         |_| None,
@@ -123,13 +125,15 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
         },
         |id| {
             (id == "shared").then(|| {
-                Arc::new(|request: EmbeddingRequest<'_, HostContext<'_>>| -> EmbeddingFactoryFuture<'_> {
-                    Box::pin(async move {
-                        assert_eq!(request.context.borrowed_config, "scoped-config");
-                        Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
-                            as Box<dyn EmbeddingModel>)
-                    })
-                }) as _
+                Arc::new(
+                    |request: EmbeddingRequest<'_, HostContext<'_>>| -> EmbeddingFactoryFuture<'_> {
+                        Box::pin(async move {
+                            assert_eq!(request.context.borrowed_config, "scoped-config");
+                            Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
+                                as Box<dyn EmbeddingModel>)
+                        })
+                    },
+                ) as _
             })
         },
         |id| {
@@ -190,7 +194,7 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
     let embedding = overrides
         .build_embedding(
             "shared",
-        EmbeddingRequest {
+            EmbeddingRequest {
                 model: "embed-model",
                 dimensions: 8,
                 context: &scoped_context,
@@ -207,7 +211,7 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
     let fallback = overrides
         .build_embedding(
             "unregistered",
-        EmbeddingRequest {
+            EmbeddingRequest {
                 model: "embed-model",
                 dimensions: 4,
                 context: &fallback_context,
