@@ -123,7 +123,9 @@ async fn connection_test_uses_host_managed_factory_and_returns_actual_width() {
     };
     let credentials: CredentialResolver = std::sync::Arc::new(|_| String::new());
     let managed: ManagedModelFactory = std::sync::Arc::new(|_, dims| {
-        Box::pin(async move { Ok(Box::new(crate::MockEmbeddingModel::new(dims))) })
+        Box::pin(async move {
+            Ok(Box::new(crate::MockEmbeddingModel::new(dims)) as Box<dyn crate::EmbeddingModel>)
+        })
     });
     let result = test_embedding_connection(&settings, &credentials, &managed, None)
         .await
