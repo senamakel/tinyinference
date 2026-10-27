@@ -197,15 +197,13 @@ impl<Ctx> std::fmt::Debug for EmbeddingRequest<'_, Ctx> {
     }
 }
 
+/// A provider embedding factory's async result, borrowing its request context.
+pub type EmbeddingFactoryFuture<'a> =
+    Pin<Box<dyn Future<Output = EmbeddingResult<Box<dyn EmbeddingModel>>> + Send + 'a>>;
+
 /// Builds a provider embedding model.
-pub type EmbeddingFactory<Ctx> = Arc<
-    dyn for<'a> Fn(
-            &'a EmbeddingRequest<'a, Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = EmbeddingResult<Box<dyn EmbeddingModel>>> + Send + 'a>,
-        > + Send
-        + Sync,
->;
+pub type EmbeddingFactory<Ctx> =
+    Arc<dyn for<'a> Fn(&'a EmbeddingRequest<'a, Ctx>) -> EmbeddingFactoryFuture<'a> + Send + Sync>;
 
 /// Owned host context passed to a catalog listing implementation.
 pub struct CatalogRequest<Ctx> {
@@ -226,15 +224,13 @@ impl<Ctx> std::fmt::Debug for CatalogRequest<Ctx> {
 pub type CatalogListing<Ctx> =
     Arc<dyn Fn(CatalogRequest<Ctx>) -> BoxFuture<std::result::Result<Value, String>> + Send + Sync>;
 
+/// Async result of a provider limit-discovery request.
+pub type CatalogLimitsFuture<'a> =
+    Pin<Box<dyn Future<Output = Option<DiscoveryRequest>> + Send + 'a>>;
+
 /// Builds the provider limit discovery request for a model, if supported.
-pub type CatalogLimits<Ctx> = Arc<
-    dyn for<'a> Fn(
-            &'a str,
-            &'a Ctx,
-        ) -> Pin<Box<dyn Future<Output = Option<DiscoveryRequest>> + Send + 'a>>
-        + Send
-        + Sync,
->;
+pub type CatalogLimits<Ctx> =
+    Arc<dyn for<'a> Fn(&'a str, &'a Ctx) -> CatalogLimitsFuture<'a> + Send + Sync>;
 
 /// A provider catalog listing and optional model-limit resolver.
 pub struct CatalogEntry<Ctx> {
@@ -355,11 +351,7 @@ impl<Ctx> ProviderOverrides<Ctx> {
         builtin: B,
     ) -> EmbeddingResult<Box<dyn EmbeddingModel>>
     where
-        B: FnOnce(
-            &'a EmbeddingRequest<'a, Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = EmbeddingResult<Box<dyn EmbeddingModel>>> + Send + 'a>,
-        >,
+        B: FnOnce(&'a EmbeddingRequest<'a, Ctx>) -> EmbeddingFactoryFuture<'a>,
     {
         match self.embedding_factory(provider_id) {
             Some(factory) => factory(request).await,

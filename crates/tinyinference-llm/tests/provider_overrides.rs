@@ -7,8 +7,9 @@ use tinyinference_embeddings::{EmbeddingModel, MockEmbeddingModel};
 use tinyinference_llm::model::ChatModel;
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::providers::overrides::{
-    CatalogEntry, CatalogRequest, ChatModelEntry, ChatModelRequest, EmbeddingRequest,
-    ProviderModelMetadata, ProviderOverrides, ReadinessRequest,
+    CatalogEntry, CatalogLimitsFuture, CatalogRequest, ChatModelEntry, ChatModelRequest,
+    EmbeddingFactoryFuture, EmbeddingRequest, ProviderModelMetadata, ProviderOverrides,
+    ReadinessRequest,
 };
 
 struct HostContext<'a> {
@@ -40,7 +41,7 @@ async fn asynchronous_factories_accept_borrowed_non_clone_host_contexts() {
         },
         |id| {
             (id == "hosted").then(|| {
-                Arc::new(|request: &EmbeddingRequest<'_, HostContext<'_>>| {
+                Arc::new(|request: &EmbeddingRequest<'_, HostContext<'_>>| -> EmbeddingFactoryFuture<'_> {
                     Box::pin(async move {
                         assert_eq!(request.context.borrowed_config, "borrowed-host-config");
                         Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
@@ -122,7 +123,7 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
         },
         |id| {
             (id == "shared").then(|| {
-                Arc::new(|request: &EmbeddingRequest<'_, HostContext<'_>>| {
+                Arc::new(|request: &EmbeddingRequest<'_, HostContext<'_>>| -> EmbeddingFactoryFuture<'_> {
                     Box::pin(async move {
                         assert_eq!(request.context.borrowed_config, "scoped-config");
                         Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
@@ -139,17 +140,20 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
                         Ok(serde_json::json!({"models": []}))
                     })
                 }),
-                limits: Some(Arc::new(|model, context: &HostContext<'static>| {
-                    Box::pin(async move {
-                        (model == "catalog-model" && context.borrowed_config == "catalog-config")
-                            .then(|| {
-                                tinyinference_llm::model::discover::DiscoveryRequest::new(
-                                    "https://provider.invalid/v1",
-                                    model,
-                                )
-                            })
-                    })
-                })),
+                limits: Some(Arc::new(
+                    |model, context: &HostContext<'static>| -> CatalogLimitsFuture<'_> {
+                        Box::pin(async move {
+                            (model == "catalog-model"
+                                && context.borrowed_config == "catalog-config")
+                                .then(|| {
+                                    tinyinference_llm::model::discover::DiscoveryRequest::new(
+                                        "https://provider.invalid/v1",
+                                        model,
+                                    )
+                                })
+                        })
+                    },
+                )),
             })
         },
     );
