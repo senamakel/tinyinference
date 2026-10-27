@@ -239,7 +239,10 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
             default_model: Some("builtin-model"),
             native_tool_calling: false,
             thread_id: None,
-            context: &fallback_context,
+            context: &HostContext {
+                borrowed_config: "fallback-config",
+                _ownership_marker: std::marker::PhantomData,
+            },
         },
         |_| {
             Ok((
@@ -281,7 +284,10 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
         .list_catalog(
             "shared",
             CatalogRequest {
-                context: catalog_context,
+                context: HostContext {
+                    borrowed_config: "catalog-config",
+                    _ownership_marker: std::marker::PhantomData,
+                },
             },
             |_| panic!("catalog override must run before builtin"),
         )
