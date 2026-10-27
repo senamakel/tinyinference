@@ -199,8 +199,11 @@ impl<Ctx> std::fmt::Debug for EmbeddingRequest<'_, Ctx> {
 
 /// Builds a provider embedding model.
 pub type EmbeddingFactory<Ctx> = Arc<
-    dyn for<'a> Fn(&EmbeddingRequest<'a, Ctx>) -> EmbeddingResult<Box<dyn EmbeddingModel>>
-        + Send
+    dyn for<'a> Fn(
+            &'a EmbeddingRequest<'a, Ctx>,
+        ) -> Pin<
+            Box<dyn Future<Output = EmbeddingResult<Box<dyn EmbeddingModel>>> + Send + 'a>,
+        > + Send
         + Sync,
 >;
 
@@ -224,7 +227,14 @@ pub type CatalogListing<Ctx> =
     Arc<dyn Fn(CatalogRequest<Ctx>) -> BoxFuture<std::result::Result<Value, String>> + Send + Sync>;
 
 /// Builds the provider limit discovery request for a model, if supported.
-pub type CatalogLimits<Ctx> = Arc<dyn Fn(&str, &Ctx) -> Option<DiscoveryRequest> + Send + Sync>;
+pub type CatalogLimits<Ctx> = Arc<
+    dyn for<'a> Fn(
+            &'a str,
+            &'a Ctx,
+        ) -> Pin<Box<dyn Future<Output = Option<DiscoveryRequest>> + Send + 'a>>
+        + Send
+        + Sync,
+>;
 
 /// A provider catalog listing and optional model-limit resolver.
 pub struct CatalogEntry<Ctx> {
@@ -338,18 +348,22 @@ impl<Ctx> ProviderOverrides<Ctx> {
     ///
     /// # Errors
     /// Returns the selected factory's construction error.
-    pub fn build_embedding<B>(
-        &self,
+    pub async fn build_embedding<'a, B>(
+        &'a self,
         provider_id: &str,
-        request: &EmbeddingRequest<'_, Ctx>,
+        request: &'a EmbeddingRequest<'a, Ctx>,
         builtin: B,
     ) -> EmbeddingResult<Box<dyn EmbeddingModel>>
     where
-        B: FnOnce(&EmbeddingRequest<'_, Ctx>) -> EmbeddingResult<Box<dyn EmbeddingModel>>,
+        B: FnOnce(
+            &'a EmbeddingRequest<'a, Ctx>,
+        ) -> Pin<
+            Box<dyn Future<Output = EmbeddingResult<Box<dyn EmbeddingModel>>> + Send + 'a>,
+        >,
     {
         match self.embedding_factory(provider_id) {
-            Some(factory) => factory(request),
-            None => builtin(request),
+            Some(factory) => factory(request).await,
+            None => builtin(request).await,
         }
     }
 
