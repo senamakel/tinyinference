@@ -7,8 +7,9 @@ use tinyinference_embeddings::{EmbeddingModel, MockEmbeddingModel};
 use tinyinference_llm::model::ChatModel;
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::providers::overrides::{
-    CatalogEntry, CatalogLimitsRequest, CatalogRequest, ChatModelEntry, ChatModelRequest,
-    EmbeddingRequest, ProviderModelMetadata, ProviderOverrides, ReadinessRequest,
+    CatalogEntry, CatalogLimitsFuture, CatalogLimitsRequest, CatalogRequest, ChatModelEntry,
+    ChatModelRequest, EmbeddingFactoryFuture, EmbeddingRequest, ProviderModelMetadata,
+    ProviderOverrides, ReadinessRequest,
 };
 
 struct HostContext<'a> {
@@ -39,13 +40,15 @@ async fn asynchronous_factories_accept_owned_non_clone_host_contexts() {
         },
         |id| {
             (id == "hosted").then(|| {
-                Arc::new(|request: EmbeddingRequest<HostContext<'static>>| {
-                    Box::pin(async move {
-                        assert_eq!(request.context.borrowed_config, "borrowed-host-config");
-                        Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
-                            as Box<dyn EmbeddingModel>)
-                    })
-                })
+                Arc::new(
+                    |request: EmbeddingRequest<HostContext<'static>>| -> EmbeddingFactoryFuture {
+                        Box::pin(async move {
+                            assert_eq!(request.context.borrowed_config, "borrowed-host-config");
+                            Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
+                                as Box<dyn EmbeddingModel>)
+                        })
+                    },
+                )
                     as tinyinference_llm::providers::overrides::EmbeddingFactory<
                         HostContext<'static>,
                     >
@@ -124,13 +127,15 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
         },
         |id| {
             (id == "shared").then(|| {
-                Arc::new(|request: EmbeddingRequest<HostContext<'static>>| {
-                    Box::pin(async move {
-                        assert_eq!(request.context.borrowed_config, "scoped-config");
-                        Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
-                            as Box<dyn EmbeddingModel>)
-                    })
-                })
+                Arc::new(
+                    |request: EmbeddingRequest<HostContext<'static>>| -> EmbeddingFactoryFuture {
+                        Box::pin(async move {
+                            assert_eq!(request.context.borrowed_config, "scoped-config");
+                            Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
+                                as Box<dyn EmbeddingModel>)
+                        })
+                    },
+                )
                     as tinyinference_llm::providers::overrides::EmbeddingFactory<
                         HostContext<'static>,
                     >
@@ -145,7 +150,7 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
                     })
                 }),
                 limits: Some(Arc::new(
-                    |request: CatalogLimitsRequest<HostContext<'static>>| {
+                    |request: CatalogLimitsRequest<HostContext<'static>>| -> CatalogLimitsFuture {
                         Box::pin(async move {
                             (request.model == "catalog-model"
                                 && request.context.borrowed_config == "catalog-config")
