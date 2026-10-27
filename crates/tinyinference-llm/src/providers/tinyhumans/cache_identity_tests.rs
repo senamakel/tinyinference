@@ -63,6 +63,7 @@ fn reading_cache_identity_never_resolves_or_includes_credentials() {
     let reads = Arc::new(AtomicUsize::new(0));
     let resolver_reads = Arc::clone(&reads);
     let model = TinyHumansModel::new("https://api.example.test", "", "default-model", move || {
+        let resolver_reads = Arc::clone(&resolver_reads);
         Box::pin(async move {
             resolver_reads.fetch_add(1, Ordering::SeqCst);
             Ok("must-not-appear-in-cache-identity".into())

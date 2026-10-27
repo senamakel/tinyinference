@@ -106,6 +106,7 @@ async fn dynamic_bearer_is_resolved_again_for_invoke_and_stream() {
     let reads = Arc::new(AtomicUsize::new(0));
     let source = reads.clone();
     let model = TinyHumansModel::new(&base, "", "default-model", move || {
+        let source = Arc::clone(&source);
         Box::pin(async move {
             Ok(format!(
                 "token-{}",
@@ -742,6 +743,7 @@ async fn managed_auth_failure_reports_the_credential_its_request_carried() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen_by_handler = seen.clone();
     let model = TinyHumansModel::new_with_credential(base, "", "default-model", move || {
+        let resolver_use_api_key = Arc::clone(&resolver_use_api_key);
         Box::pin(async move {
             let api_key = resolver_use_api_key.load(Ordering::SeqCst);
             Ok(TinyHumansCredential {
@@ -802,6 +804,7 @@ async fn managed_auth_failure_carries_a_non_secret_request_credential_fingerprin
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen_by_handler = seen.clone();
     let model = TinyHumansModel::new_with_credential(base, "", "default-model", move || {
+        let token_for_resolver = Arc::clone(&token_for_resolver);
         Box::pin(async move {
             Ok(TinyHumansCredential {
                 bearer: token_for_resolver.lock().unwrap().clone(),
