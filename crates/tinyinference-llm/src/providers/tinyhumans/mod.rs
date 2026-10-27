@@ -9,6 +9,8 @@ mod catalog;
 mod reasoning;
 mod usage;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -29,7 +31,9 @@ pub use reasoning::{REASONING_OFF_METADATA_KEY, apply_reasoning, with_thread_id}
 pub use usage::project_tinyhumans_envelope;
 
 /// Resolves the current bearer credential for a managed inference call.
-pub type BearerResolver = Arc<dyn Fn() -> Result<String> + Send + Sync>;
+pub type BearerResolver = Arc<
+    dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync,
+>;
 
 /// Which kind of credential a managed request authenticated with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,8 +53,12 @@ pub struct TinyHumansCredential {
     pub kind: TinyHumansCredentialKind,
 }
 
-type KindedResolver =
-    Arc<dyn Fn() -> Result<(String, Option<TinyHumansCredentialKind>)> + Send + Sync>;
+type KindedResolver = Arc<
+    dyn Fn() -> Pin<
+            Box<dyn Future<Output = Result<(String, Option<TinyHumansCredentialKind>)>> + Send>,
+        > + Send
+        + Sync,
+>;
 
 /// Opaque, non-secret identity for a bearer credential used by one request.
 ///
@@ -274,13 +282,19 @@ impl TinyHumansModel {
         base_url: impl AsRef<str>,
         model: impl AsRef<str>,
         default_model: impl AsRef<str>,
-        resolver: impl Fn() -> Result<String> + Send + Sync + 'static,
+        resolver: impl Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>>
+        + Send
+        + Sync
+        + 'static,
     ) -> Result<Self> {
         Self::build(
             base_url,
             model,
             default_model,
-            Arc::new(move || resolver().map(|bearer| (bearer, None))),
+            Arc::new(move || {
+                let future = resolver();
+                Box::pin(async move { future.await.map(|bearer| (bearer, None)) })
+            }),
         )
     }
 
@@ -294,14 +308,22 @@ impl TinyHumansModel {
         base_url: impl AsRef<str>,
         model: impl AsRef<str>,
         default_model: impl AsRef<str>,
-        resolver: impl Fn() -> Result<TinyHumansCredential> + Send + Sync + 'static,
+        resolver: impl Fn() -> Pin<Box<dyn Future<Output = Result<TinyHumansCredential>> + Send>>
+        + Send
+        + Sync
+        + 'static,
     ) -> Result<Self> {
         Self::build(
             base_url,
             model,
             default_model,
             Arc::new(move || {
-                resolver().map(|credential| (credential.bearer, Some(credential.kind)))
+                let future = resolver();
+                Box::pin(async move {
+                    future
+                        .await
+                        .map(|credential| (credential.bearer, Some(credential.kind)))
+                })
             }),
         )
     }
@@ -668,7 +690,7 @@ struct ResolvedBearer(KindedResolver);
 #[async_trait]
 impl BearerSource for ResolvedBearer {
     async fn current(&self) -> Result<Option<String>> {
-        let (bearer, kind) = (self.0)()?;
+        let (bearer, kind) = (self.0)().await?;
         // Outside a dispatch scope (e.g. the readiness probe) there is nothing
         // to attribute, so a missing task-local is fine.
         let sent = SentCredential {

@@ -93,7 +93,9 @@ async fn serve(fixture: Fixture) -> String {
 }
 
 fn fixture_model(base: &str) -> TinyHumansModel {
-    TinyHumansModel::new(base, "", "default-model", || Ok("test-token".into()))
+    TinyHumansModel::new(base, "", "default-model", || {
+        Box::pin(async { Ok("test-token".into()) })
+    })
         .expect("model construction")
 }
 
@@ -104,10 +106,12 @@ async fn dynamic_bearer_is_resolved_again_for_invoke_and_stream() {
     let reads = Arc::new(AtomicUsize::new(0));
     let source = reads.clone();
     let model = TinyHumansModel::new(&base, "", "default-model", move || {
-        Ok(format!(
-            "token-{}",
-            source.fetch_add(1, Ordering::SeqCst) + 1
-        ))
+        Box::pin(async move {
+            Ok(format!(
+                "token-{}",
+                source.fetch_add(1, Ordering::SeqCst) + 1
+            ))
+        })
     })
     .unwrap();
     model
@@ -137,7 +141,7 @@ async fn constructor_model_is_default_and_nonblank_request_model_overrides_it() 
     let fixture = Fixture::default();
     let base = serve(fixture.clone()).await;
     let model = TinyHumansModel::new(&base, " constructor-model ", "fallback-model", || {
-        Ok("token".into())
+        Box::pin(async { Ok("token".into()) })
     })
     .unwrap();
     for requested_model in [None, Some("request-model"), Some("  ")] {
@@ -152,8 +156,10 @@ async fn constructor_model_is_default_and_nonblank_request_model_overrides_it() 
         assert_eq!(requests[2].1["model"], "constructor-model");
     }
 
-    let fallback_model =
-        TinyHumansModel::new(&base, "  ", "fallback-model", || Ok("token".into())).unwrap();
+    let fallback_model = TinyHumansModel::new(&base, "  ", "fallback-model", || {
+        Box::pin(async { Ok("token".into()) })
+    })
+    .unwrap();
     fallback_model
         .invoke(
             &(),
@@ -172,7 +178,7 @@ async fn resolver_failure_stops_before_transport() {
     let fixture = Fixture::default();
     let base = serve(fixture.clone()).await;
     let model = TinyHumansModel::new(&base, "m", "default-model", || {
-        Err(Error::Model("credential source failed".into()))
+        Box::pin(async { Err(Error::Model("credential source failed".into())) })
     })
     .unwrap();
     let error = model
@@ -477,7 +483,7 @@ async fn readiness_blocks_only_confirmed_missing_provider_configuration() {
 #[tokio::test]
 async fn readiness_fails_open_when_bearer_resolution_fails() {
     let model = TinyHumansModel::new("http://127.0.0.1:1", "m", "default-model", || {
-        Err(Error::Model("credential lookup unavailable".into()))
+        Box::pin(async { Err(Error::Model("credential lookup unavailable".into())) })
     })
     .unwrap();
     model
@@ -736,14 +742,16 @@ async fn managed_auth_failure_reports_the_credential_its_request_carried() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen_by_handler = seen.clone();
     let model = TinyHumansModel::new_with_credential(base, "", "default-model", move || {
-        let api_key = resolver_use_api_key.load(Ordering::SeqCst);
-        Ok(TinyHumansCredential {
-            bearer: if api_key { "key".into() } else { "jwt".into() },
-            kind: if api_key {
-                TinyHumansCredentialKind::ApiKey
-            } else {
-                TinyHumansCredentialKind::Session
-            },
+        Box::pin(async move {
+            let api_key = resolver_use_api_key.load(Ordering::SeqCst);
+            Ok(TinyHumansCredential {
+                bearer: if api_key { "key".into() } else { "jwt".into() },
+                kind: if api_key {
+                    TinyHumansCredentialKind::ApiKey
+                } else {
+                    TinyHumansCredentialKind::Session
+                },
+            })
         })
     })
     .expect("model construction")
@@ -794,9 +802,11 @@ async fn managed_auth_failure_carries_a_non_secret_request_credential_fingerprin
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen_by_handler = seen.clone();
     let model = TinyHumansModel::new_with_credential(base, "", "default-model", move || {
-        Ok(TinyHumansCredential {
-            bearer: token_for_resolver.lock().unwrap().clone(),
-            kind: TinyHumansCredentialKind::Session,
+        Box::pin(async move {
+            Ok(TinyHumansCredential {
+                bearer: token_for_resolver.lock().unwrap().clone(),
+                kind: TinyHumansCredentialKind::Session,
+            })
         })
     })
     .unwrap()
